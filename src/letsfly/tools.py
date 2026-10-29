@@ -6,7 +6,7 @@ Runs over stdio: nothing may print, stdout belongs to the protocol.
 """
 from typing import Annotated, Literal
 
-from letsfly import airports, params, promos, search
+from letsfly import airports, links, params, promos, search
 from letsfly.mcp import Range, serve, tool
 from letsfly.tfs import booking_link
 
@@ -65,7 +65,8 @@ def search_flights(
     minutes, overnight: true when the layover touches the night, crossing midnight or starting before 05:00,
     change_of_airport: true when the next leg leaves from another airport, also shown in route as AEP/EZE)
     and operated_by: flight -> the carrier that flies it when it is another company than the airline
-    selling it, or null when there is none."""
+    selling it, or null when there is none. link is a short local link (file://.../flights/l/<id>.html)
+    that opens Google Flights' booking page for that row."""
     query = params.flight_search(origin, destination, date, return_date, max_stops, airlines, departure_window,
                                  adults, cabin, currency)
     found, lost = search.flights(query)
@@ -84,7 +85,8 @@ def search_flights(
         if outbound.self_transfer or (back and back.self_transfer):
             row["self_transfer"] = True
         if all_links or index < 2:
-            row["link"] = booking_link([outbound, back] if back else [outbound], query.seat, query.adults, currency)
+            row["link"] = links.short(booking_link([outbound, back] if back else [outbound], query.seat, query.adults,
+                                                   currency))
         rows.append(row)
     out = {"currency": currency, "count": len(rows), "flights": rows}
     if lost:
@@ -162,9 +164,9 @@ def promociones_aereas(
 ) -> dict:
     """Deals published on promociones-aereas.com.ar (flights, packages, hotels), newest first, each with
     its details nested. price_from is the title's "a partir de": the lowest price the blog saw when it
-    wrote the post, not a price per date. Detail dates carry no price; for each one, link_templates[link]
-    with {out} and {back} filled in gives the Despegar link. For the real price of a flight on those
-    dates, use search_flights."""
+    wrote the post, not a price per date. Detail dates carry no price; each one carries its link, and to
+    (the destination airport) when the link names one. For the real price of a flight on those dates, use
+    search_flights."""
     return promos.search(query, type, page, limit, details, month, stay_days)
 
 

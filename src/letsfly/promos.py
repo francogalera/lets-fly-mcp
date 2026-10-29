@@ -10,7 +10,7 @@ import xml.etree.ElementTree as ET
 from datetime import timedelta, timezone
 from email.utils import parsedate_to_datetime
 
-from letsfly import errors
+from letsfly import errors, links
 
 # A WordPress deals blog. The list comes from its search RSS feed and the details from each post's
 # HTML. Requests to the site are at least 20 s apart, as its robots.txt asks of AI bots, and posts
@@ -119,13 +119,14 @@ def _details(url, month, stay_days):
             when = re.findall(r"\d{4}-\d{2}-\d{2}", link)
             out.setdefault("featured", []).append({
                 "hotel": q.get("hotel_name", [""])[0], "out": when[0] if when else None,
-                "back": when[1] if len(when) > 1 else None, "meal_plan": q.get("meal_plans", [""])[0], "link": link})
+                "back": when[1] if len(when) > 1 else None, "meal_plan": q.get("meal_plans", [""])[0],
+                "link": links.short(link)})
         occupancy = re.search(r"Ver opciones en base (\w+)", a)
         if occupancy:
-            out.setdefault("other_occupancy", {})[occupancy.group(1).lower()] = link
+            out.setdefault("other_occupancy", {})[occupancy.group(1).lower()] = links.short(link)
     for li in re.findall(r"<li[^>]*>\s*<strong>([^<:]+):?</strong>(.*?)</li>", body, re.S):
         out.setdefault("fields", {})[_plain(li[0])] = _plain(li[1])
-    dates, templates = [], []
+    dates = {}
     for table in re.findall(r"<table[^>]*promos-tablas.*?</table>", body, re.S):
         for row in re.findall(r"<tr.*?</tr>", table, re.S):
             iso = re.findall(r"<td style='display:none;'>(\d{4}-\d{2}-\d{2})</td>", row)
@@ -140,21 +141,27 @@ def _details(url, month, stay_days):
                 continue
             stops = re.search(r"class='escala[^']*'>([^<]+)<", row)
             href = _href(link.group(1))
-            template = href.replace(go, "{out}").replace(back, "{back}")
-            if template not in templates:
-                templates.append(template)
-            dates.append({"out": go, "back": back, "days": int(days.group(1)) if days else None,
-                          "direct": bool(stops and "directo" in stops.group(1).lower()),
-                          "link": templates.index(template)})
+            to = _destination(href)
+            # A package lists its dates once per room occupancy, a table each: the first one, the occupancy the
+            # title's price is based on, keeps the date
+            dates.setdefault((go, back, to), {
+                "out": go, "back": back, **({"to": to} if to else {}), "days": int(days.group(1)) if days else None,
+                "direct": bool(stops and "directo" in stops.group(1).lower()), "link": href})
     # With stay_days, exact stays go first, so a cut drops the ±1 ones
     exact_first = (lambda d: abs((d["days"] or 0) - stay_days)) if stay_days else (lambda d: 0)
-    dates = sorted({tuple(d.items()): d for d in dates}.values(), key=lambda d: (exact_first(d), d["out"], d["back"]))
+    dates = sorted(dates.values(), key=lambda d: (exact_first(d), d["out"], d["back"]))
     # Some posts list many destinations and hundreds of dates: cut them and report the total
     if len(dates) > MAX_DATES:
         out["dates_total"] = len(dates)
-    out["dates"] = dates[:MAX_DATES]
-    out["link_templates"] = templates
+    out["dates"] = [d | {"link": links.short(d["link"])} for d in dates[:MAX_DATES]]
     return out
+
+
+def _destination(href):
+    """The airport a flight link searches to: Despegar names it in the path, Travel Services in to=."""
+    found = (re.search(r"/flights/results/(?:roundtrip|oneway)/[A-Z]{3}/([A-Z]{3})/", href)
+             or re.search(r"[?&]to=([A-Z]{3})(?:&|$)", href))
+    return found.group(1) if found else None
 
 
 def search(query, type, page, limit, details, month, stay_days):

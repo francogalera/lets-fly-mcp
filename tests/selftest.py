@@ -13,6 +13,7 @@ import signal
 import subprocess
 import sys
 import time
+import urllib.parse
 
 LAUNCHER = sys.argv[1]
 IMAGE = subprocess.run([LAUNCHER, "image"], capture_output=True, text=True, check=True).stdout.strip()
@@ -35,6 +36,16 @@ def check(name, ok, detail=""):
 def problem(data):
     """The message of a tool's error object, or why there is nothing to show."""
     return data["error"]["message"] if "error" in data else "no results"
+
+
+def page_ok(link):
+    """A short link names a page on this machine that redirects to a Google Flights booking page."""
+    path = urllib.parse.unquote(link[len("file://"):]) if link and link.startswith("file://") else ""
+    time.sleep(0.5)  # the page is written from the core's stderr, which can trail its reply by a moment
+    if not os.path.exists(path):
+        return False
+    with open(path) as f:
+        return "url=https://www.google.com/travel/flights/booking?" in f.read()
 
 
 def leftovers(pid):
@@ -129,6 +140,8 @@ def main():
               f"{len(rows)} options, from USD {rows[0]['price']:.0f}" if rows else problem(data))
         check("MCP: search_flights with layovers and operator per direction",
               bool(rows) and all({"layovers", "operated_by"} <= r[d].keys() for r in rows for d in ("out", "back")))
+        check("MCP: booking links are short and their page redirects to Google", bool(rows) and page_ok(rows[0].get("link")),
+              (rows[0].get("link") or "no link") if rows else "no results")
         check("MCP: short reply (under 4000 characters)", len(text) < 4000, f"{len(text)} characters")
         res = mcp.call("tools/call", {"name": "cheapest_dates", "arguments": {
             "origin": ROUTE[0], "destination": ROUTE[1], "start_date": DATE, "end_date": RANGE_END, "trip_days": 10}})["result"]
