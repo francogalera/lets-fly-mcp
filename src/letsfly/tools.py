@@ -65,7 +65,7 @@ def search_flights(
     minutes, overnight: true when the layover touches the night, crossing midnight or starting before 05:00,
     change_of_airport: true when the next leg leaves from another airport, also shown in route as AEP/EZE)
     and operated_by: flight -> the carrier that flies it when it is another company than the airline
-    selling it, or null when there is none. link is a short local link (file://.../flights/l/<id>.html)
+    selling it, or null when there is none. link is a short local link (file://.../flight-links/<id>.html)
     that opens Google Flights' booking page for that row."""
     query = params.flight_search(origin, destination, date, return_date, max_stops, airlines, departure_window,
                                  adults, cabin, currency)

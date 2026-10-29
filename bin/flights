@@ -15,7 +15,8 @@
 # proxy, which lets HTTPS through only to www.google.com and promociones-aereas.com.ar. On exit, its
 # log is appended to ~/.local/state/flights/egress.log and both containers and the network are removed.
 # Links: the core hands out short file:// links and prints "LINK <id> <url>" on stderr; this script pipes
-# that stderr through src/letsfly/links.py, which writes each redirect page to ~/.local/state/flights/l.
+# that stderr through src/letsfly/links.py, which writes each redirect page to local/flight-links/ in this repo.
+# Not under ~/.local/state: Firefox installed as a snap cannot read hidden folders of the home.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
@@ -25,7 +26,7 @@ IMAGE="lets-fly-core:$(cd "$HERE" && find src/letsfly docker -type f ! -path '*/
 PROXY_IMAGE="lets-fly-proxy:$(sha256sum "$HERE/docker/proxy.py" | cut -c1-12)"
 ALLOW=www.google.com,promociones-aereas.com.ar
 LOG="${XDG_STATE_HOME:-$HOME/.local/state}/flights/egress.log"
-LINKS="${XDG_STATE_HOME:-$HOME/.local/state}/flights/l"
+LINKS="$HERE/local/flight-links"
 SESSION="flights-$$-$RANDOM"
 PROXY=http://proxy:3128
 
