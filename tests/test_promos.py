@@ -81,9 +81,30 @@ class Details(unittest.TestCase):
                 f"<table class='promos-tablas'>{rows}</table>También te puede interesar</div>")
         with mock.patch.object(promos, "_get", lambda url: page):
             out = promos._details("https://promociones-aereas.com.ar/currency-test-pa-p.html", None, None)
-        self.assertEqual(out["link_templates"], ["https://search.test/r?dates={out},{back}&currency=USD&utm=1"])
-        self.assertEqual(len(out["dates"]), 3)
+        self.assertEqual([d["link"] for d in out["dates"]],
+                         [f"https://search.test/r?dates=2026-11-{day},2026-12-{day}&currency=USD&utm=1" for day in (24, 25, 26)])
         self.assertEqual(out["featured"][0]["link"], "https://pkg.test/p?hotel_name=H&currency=USD")
+
+    def test_every_date_carries_its_own_link(self):
+        def table(link, dates):
+            return "<table class='promos-tablas'>" + "".join(
+                f"<tr><td style='display:none;'>{a}</td><td style='display:none;'>{b}</td>"
+                f"<td><a href='{link.format(a=a, b=b)}'>ver</a></td></tr>" for a, b in dates) + "</table>"
+        flights = ("https://www.despegar.com.ar/shop/flights/results/roundtrip/BUE/{to}/{{a}}/{{b}}/1/0/0?clt_n=r",
+                   "https://search.travelservices.com.ar/flights/results?dates={{a}}%2C{{b}}&from=BUE&to={to}&type=RT")
+        package = "https://www.despegar.com.ar/trip/start/FH/CIT_982/CIT_5963/{{a}}/{{b}}/CIT_5963/{{a}}/{{b}}/{people}?x=1"
+        pairs = [("2027-03-01", "2027-03-11"), ("2027-03-02", "2027-03-12")]
+        page = ('<div id="post-content-container">' + table(flights[0].format(to="MAD"), pairs)
+                + table(flights[1].format(to="FLN"), pairs[:1]) + table(package.format(people=2), pairs)
+                + table(package.format(people=3), pairs) + "</div>")
+        with mock.patch.object(promos, "_get", lambda url: page):
+            out = promos._details("https://promociones-aereas.com.ar/links-test-pa-p.html", None, None)
+        self.assertNotIn("link_templates", out)
+        got = [(d["out"], d.get("to"), d["link"].rsplit("/", 1)[-1]) for d in out["dates"]]
+        self.assertEqual(sorted(got, key=str), sorted([
+            ("2027-03-01", "MAD", "0?clt_n=r"), ("2027-03-02", "MAD", "0?clt_n=r"),
+            ("2027-03-01", "FLN", "results?dates=2027-03-01%2C2027-03-11&from=BUE&to=FLN&type=RT"),
+            ("2027-03-01", None, "2?x=1"), ("2027-03-02", None, "2?x=1")], key=str))
 
 
 if __name__ == "__main__":

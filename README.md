@@ -29,6 +29,13 @@ Each session gets its own internal network, a read-only, unprivileged core conta
 mounted, and a proxy that only lets HTTPS through to www.google.com and promociones-aereas.com.ar.
 Every egress attempt is logged to `~/.local/state/flights/egress.log`.
 
+## Links
+
+The tools hand out short local links, `file:///home/<you>/.local/state/flights/l/<id>.html`, instead of booking
+links of about 300 characters, which the agent sometimes altered when it copied them. Each page redirects to the
+real link. The core prints `LINK <id> <url>` on stderr, and `bin/flights` pipes it through `src/letsfly/links.py`,
+which writes the page only when `<id>` is the hash of `<url>`. The container still mounts nothing.
+
 ## Tests
 
 `tests/replay` keeps recorded pages (the `ds:1` blob and each row's aria-label) and the reference output

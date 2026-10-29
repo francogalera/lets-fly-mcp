@@ -14,6 +14,8 @@
 # system, no privileges, on an internal network of its own per session whose only way out is the
 # proxy, which lets HTTPS through only to www.google.com and promociones-aereas.com.ar. On exit, its
 # log is appended to ~/.local/state/flights/egress.log and both containers and the network are removed.
+# Links: the core hands out short file:// links and prints "LINK <id> <url>" on stderr; this script pipes
+# that stderr through src/letsfly/links.py, which writes each redirect page to ~/.local/state/flights/l.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
@@ -23,6 +25,7 @@ IMAGE="lets-fly-core:$(cd "$HERE" && find src/letsfly docker -type f ! -path '*/
 PROXY_IMAGE="lets-fly-proxy:$(sha256sum "$HERE/docker/proxy.py" | cut -c1-12)"
 ALLOW=www.google.com,promociones-aereas.com.ar
 LOG="${XDG_STATE_HOME:-$HOME/.local/state}/flights/egress.log"
+LINKS="${XDG_STATE_HOME:-$HOME/.local/state}/flights/l"
 SESSION="flights-$$-$RANDOM"
 PROXY=http://proxy:3128
 
@@ -73,9 +76,9 @@ run_core() {
   fi
   docker run --rm --init --pull never "${opts[@]}" --name "$SESSION-core" --label "flights.pid=$$" \
     --network "$SESSION" -e "HTTPS_PROXY=$PROXY" -e "https_proxy=$PROXY" -e "HTTP_PROXY=$PROXY" -e "http_proxy=$PROXY" \
-    --read-only --tmpfs /tmp:size=64m --cap-drop=ALL --security-opt=no-new-privileges \
+    -e "FLIGHTS_LINKS=$LINKS" --read-only --tmpfs /tmp:size=64m --cap-drop=ALL --security-opt=no-new-privileges \
     --memory=512m --pids-limit=128 \
-    "$IMAGE" "$@"
+    "$IMAGE" "$@" 2> >(python3 -I "$HERE/src/letsfly/links.py" "$LINKS")
 }
 
 case "${1:-}" in
