@@ -2,8 +2,11 @@
 
 Each tool is a function registered with @tool. Its schema comes from the type hints: Annotated carries
 the description (a str) and the bounds (Range). Arguments are checked against that schema before the
-call, calls run in parallel, and a lock keeps two replies from interleaving on stdout.
+call, calls run in parallel, and a lock keeps two replies from interleaving on stdout. @tool is also the
+one place errors are handled: what a tool raises comes back as {"error": ...} from letsfly.errors, over
+MCP with isError and to direct callers (the terminal, the audit, the tests) alike.
 """
+import functools
 import inspect
 import json
 import sys
@@ -12,6 +15,8 @@ import types
 import typing
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+
+from letsfly import errors
 
 PROTOCOL = "2025-06-18"
 READ_ONLY = {"readOnlyHint": True, "idempotentHint": True}
@@ -27,8 +32,14 @@ class Range:
 
 def tool(name=None):
     def register(fn):
-        _tools[name or fn.__name__] = (fn, _input_schema(fn))
-        return fn
+        @functools.wraps(fn)
+        def call(*args, **kwargs):
+            try:
+                return fn(*args, **kwargs)
+            except Exception as e:  # noqa: BLE001 - the agent gets the error as an object instead of an exception
+                return errors.result(e)
+        _tools[name or fn.__name__] = (call, _input_schema(fn))
+        return call
     return register
 
 
@@ -92,23 +103,21 @@ def _invalid(value, schema, name):
 def _call(params):
     name, args = params.get("name"), params.get("arguments") or {}
     if name not in _tools:
-        return _text(f"Unknown tool {name}", error=True)
+        return _reply(errors.result(errors.UnknownTool(f"Unknown tool {name}", "name")))
     fn, schema = _tools[name]
-    problems = [f"{k}: unknown parameter" for k in args if k not in schema["properties"]]
-    problems += [f"{k}: missing" for k in schema["required"] if k not in args]
-    problems += [e for k, v in args.items() if k in schema["properties"]
+    problems = [(k, f"{k}: unknown parameter") for k in args if k not in schema["properties"]]
+    problems += [(k, f"{k}: missing") for k in schema["required"] if k not in args]
+    problems += [(k, e) for k, v in args.items() if k in schema["properties"]
                  and (e := _invalid(v, schema["properties"][k], k))]
     if problems:
-        return _text("Invalid arguments: " + "; ".join(problems), error=True)
-    try:
-        result = fn(**args)
-    except Exception as e:  # noqa: BLE001 - the agent gets the error as the tool result
-        return _text(f"{type(e).__name__}: {e}", error=True)
-    return {**_text(json.dumps(result, ensure_ascii=False, separators=(",", ":"))), "structuredContent": result}
+        message = "Invalid arguments: " + "; ".join(text for _, text in problems)
+        return _reply(errors.result(errors.InvalidArguments(message, problems[0][0])))
+    return _reply(fn(**args))
 
 
-def _text(text, error=False):
-    return {"content": [{"type": "text", "text": text}], "isError": error}
+def _reply(result):
+    text = json.dumps(result, ensure_ascii=False, separators=(",", ":"))
+    return {"content": [{"type": "text", "text": text}], "structuredContent": result, "isError": "error" in result}
 
 
 def _handle(msg):

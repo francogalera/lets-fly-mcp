@@ -1,8 +1,10 @@
 """Turns one result row of the ds:1 data into an Itinerary, reading positions as fli mapped them."""
-from datetime import datetime
+from datetime import datetime, time
 
 from letsfly.models import Itinerary, Layover, Leg
 
+# A layover that crosses midnight or starts before this time is overnight
+NIGHT_ENDS = time(5)
 # A malformed row raises; plain indexing keeps fli's exception types, which decide whether the row is skipped
 # or the whole search fails (an IndexError only gets past the flight search, not the date sweep)
 
@@ -16,9 +18,14 @@ def itinerary(row) -> Itinerary:
         raise ValueError(f"price is not a non-negative number: {price}")
     _check_positive(minutes, "duration")
     layovers = [Layover(a.destination, max(int((b.departs - a.arrives).total_seconds() // 60), 0),
-                        a.arrives.date() != b.departs.date(), a.destination != b.origin) for a, b in zip(legs, legs[1:])]
+                        _overnight(a.arrives, b.departs), a.destination != b.origin) for a, b in zip(legs, legs[1:])]
     checked, carry_on = _bags(row)
     return Itinerary(legs, price, minutes, layovers, _at(detail, 12) is True, carry_on, checked)
+
+
+def _overnight(arrives, departs):
+    """The layover touches the night: it crosses midnight, or starts before 05:00 (EZE 00:25 to 18:40)."""
+    return arrives.date() != departs.date() or arrives.time() < NIGHT_ENDS
 
 
 def _leg(fl) -> Leg:

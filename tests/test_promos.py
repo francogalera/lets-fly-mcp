@@ -4,7 +4,7 @@ import time
 import unittest
 from unittest import mock
 
-from letsfly import promos
+from letsfly import errors, promos, tools
 
 
 class Response:
@@ -57,8 +57,33 @@ class Requests(unittest.TestCase):
     def test_a_second_drop_is_raised(self):
         def urlopen(request, timeout):
             raise ConnectionResetError("reset")
-        with mock.patch("urllib.request.urlopen", urlopen):
-            self.assertRaises(ConnectionResetError, promos._get, "https://example.test/feed")
+        with mock.patch("urllib.request.urlopen", urlopen), self.assertRaises(errors.BlogError) as caught:
+            promos._get("https://example.test/feed")
+        self.assertIsInstance(caught.exception.__cause__, ConnectionResetError)
+
+    def test_blog_errors_are_typed(self):
+        with mock.patch.object(promos, "_get", lambda url: "<html>not a feed"):
+            self.assertEqual(tools.promociones_aereas()["error"]["type"], "blog_unreadable")
+        feed = ("<rss><channel><item><title>Hotel</title><link>https://promociones-aereas.com.ar/alojamientos/x.html"
+                "</link></item></channel></rss>")
+        with mock.patch.object(promos, "_get", lambda url: feed):
+            deal = tools.promociones_aereas()["deals"][0]
+        self.assertEqual(deal["details"]["error"]["type"], "blog_forbidden")
+
+
+class Details(unittest.TestCase):
+    def test_links_keep_a_raw_currency_parameter(self):
+        rows = "".join(
+            f"<tr><td style='display:none;'>2026-11-{day}</td><td style='display:none;'>2026-12-{day}</td>"
+            f"<td><a href='https://search.test/r?dates=2026-11-{day},2026-12-{day}{amp}currency=USD{amp}utm=1'>ver</a></td></tr>"
+            for day, amp in (("24", "&"), ("25", "&amp;"), ("26", "&#038;")))
+        page = ('<div id="post-content-container"><a href="https://pkg.test/p?hotel_name=H&currency=USD">Ver este Paquete</a>'
+                f"<table class='promos-tablas'>{rows}</table>También te puede interesar</div>")
+        with mock.patch.object(promos, "_get", lambda url: page):
+            out = promos._details("https://promociones-aereas.com.ar/currency-test-pa-p.html", None, None)
+        self.assertEqual(out["link_templates"], ["https://search.test/r?dates={out},{back}&currency=USD&utm=1"])
+        self.assertEqual(len(out["dates"]), 3)
+        self.assertEqual(out["featured"][0]["link"], "https://pkg.test/p?hotel_name=H&currency=USD")
 
 
 if __name__ == "__main__":

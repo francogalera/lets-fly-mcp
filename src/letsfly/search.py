@@ -91,9 +91,10 @@ class _Health:
 def dates(search, days, trip_days=None):
     """Cheapest price per departure day, one page each: ([(day, return day or None, price)], days that failed)."""
     if len(days) > MAX_DATES:
-        raise ValueError(f"This date search covers {len(days)} dates, above the {MAX_DATES}-date limit. Google's search "
-                         "page serves no calendar grid, so every date costs its own full page fetch. Narrow the range "
-                         "(or run several smaller searches).")
+        raise models.ValidationError(
+            f"This date search covers {len(days)} dates, above the {MAX_DATES}-date limit. Google's search page serves "
+            "no calendar grid, so every date costs its own full page fetch. Narrow the range (or run several smaller "
+            "searches).", "end_date", f"Split the range into searches of {MAX_DATES} dates or fewer")
     health = _Health(threading.Lock())
     outcomes = list(POOL.map(lambda day: _price_day(search, day, trip_days, health), days))
     return _collect(outcomes, len(days), health.skipped)
