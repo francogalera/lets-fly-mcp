@@ -1,0 +1,5 @@
+*
+!docker/proxy.py
+!docker/requirements.txt
+!src/letsfly
+**/__pycache__
