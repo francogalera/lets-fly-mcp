@@ -41,4 +41,7 @@ which writes the page only when `<id>` is the hash of `<url>`. The container sti
 `tests/replay` keeps recorded pages (the `ds:1` blob and each row's aria-label) and the reference output
 of the 4 tools. A refactor must reproduce it exactly; a behavior change updates `reference.json`.
 
-Part of the code derives from fli (MIT); `NOTICE` maps each file to its source.
+## Credits
+
+Part of the code derives from [fli](https://github.com/punitarani/fli) by Punit Arani (MIT), credited in
+`LICENSE`. Airport data comes from [OurAirports](https://ourairports.com/data/) (public domain).

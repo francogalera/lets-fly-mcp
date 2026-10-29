@@ -86,7 +86,7 @@ case "${1:-}" in
   image) echo "$IMAGE"; exit ;;
   selftest) exec python3 -I "$HERE/tests/selftest.py" "$HERE/bin/flights" ;;
   test) shift; exec "$HERE/tests/run.sh" "$IMAGE" "$@" ;;
-  upstream) shift; exec python3 -I "$HERE/bin/upstream.py" "$HERE" "$@" ;;
+  upstream) shift; exec python3 -I "$HERE/bin/upstream.py" "$@" ;;
   "") set -- --help ;;
 esac
 

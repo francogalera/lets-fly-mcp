@@ -1,8 +1,8 @@
 """flights upstream: what changed in fli since the commit our code derives from, read only.
 
-Lists fli's commits after the base commit, then the diff of the fli files NOTICE names as our sources,
+Lists fli's commits after the base commit, then the diff of the fli files our code derives from,
 flagging the lines that touch Google's page transport. Nothing is applied: a change worth having is
-ported by hand. Usage: upstream.py REPO_ROOT [REF]
+ported by hand. Usage: upstream.py [REF]
 """
 import json
 import os
@@ -11,6 +11,12 @@ import sys
 import urllib.request
 
 API = "https://api.github.com/repos/punitarani/fli"
+BASE = ""
+SOURCES = {f"fli/{path}.py" for path in (
+    "core/airports", "core/builders", "core/errors", "core/links", "core/parsers", "mcp/server",
+    "models/google_flights/base", "models/google_flights/dates", "models/google_flights/flights",
+    "search/_concurrency", "search/_decoders", "search/_helpers", "search/_proto", "search/_tfs", "search/client",
+    "search/dates", "search/exceptions", "search/flights")}
 STATE = os.path.join(os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state"), "flights")
 # Where a Google change shows up first: the page URL and its tfs, the ds:1 blob, the row positions we read
 TRANSPORT = re.compile(r"travel/flights|tfs|AF_initDataCallback|ds:1|sideChannel|x-goog|SOCS|impersonate|"
@@ -25,10 +31,7 @@ def get(path):
 
 
 def main():
-    root, ref = sys.argv[1], sys.argv[2] if len(sys.argv) > 2 else "main"
-    notice = open(os.path.join(root, "NOTICE")).read()
-    base = re.search(r"commit ([0-9a-f]{40})", notice).group(1)
-    ours = sorted(set(re.findall(r"fli/[\w/]+\.py", notice)))
+    base, ref, ours = BASE, sys.argv[1] if len(sys.argv) > 1 else "main", SOURCES
     compare = get(f"compare/{base}...{ref}")
     head = compare["commits"][-1]["sha"] if compare["commits"] else base
     print(f"fli {base[:7]} -> {ref} ({head[:7]}): {compare['ahead_by']} commits")
