@@ -1,7 +1,8 @@
 """The flights MCP: small tools over Google Flights and promociones-aereas.com.ar, with short answers for the agent.
 
 Flight tools run on letsfly's own core (params, search, airports) and only shape its output: one row per
-option. Runs over stdio: nothing may print, stdout belongs to the protocol.
+option. Errors are not handled here: @tool turns what a tool raises into {"error": ...} (letsfly.errors).
+Runs over stdio: nothing may print, stdout belongs to the protocol.
 """
 from typing import Annotated, Literal
 
@@ -61,15 +62,13 @@ def search_flights(
     total Google quotes for that outbound and return pair. bags is what the fare includes: carry_on and
     checked counts, null where Google does not say. self_transfer means the itinerary glues separate
     tickets (a missed connection is the traveller's problem). Each direction carries layovers (airport,
-    minutes, overnight: true when the layover spans the night, change_of_airport: true when the next leg
-    leaves from another airport, also shown in route as AEP/EZE) and operated_by: flight -> the carrier
-    that flies it when it is another company than the airline selling it, or null when there is none."""
-    try:
-        query = params.flight_search(origin, destination, date, return_date, max_stops, airlines, departure_window,
-                                     adults, cabin, currency)
-        found, lost = search.flights(query)
-    except Exception as e:  # noqa: BLE001 - the agent gets the error instead of an exception
-        return {"error": f"{type(e).__name__}: {e}"[:400]}
+    minutes, overnight: true when the layover touches the night, crossing midnight or starting before 05:00,
+    change_of_airport: true when the next leg leaves from another airport, also shown in route as AEP/EZE)
+    and operated_by: flight -> the carrier that flies it when it is another company than the airline
+    selling it, or null when there is none."""
+    query = params.flight_search(origin, destination, date, return_date, max_stops, airlines, departure_window,
+                                 adults, cabin, currency)
+    found, lost = search.flights(query)
 
     rows = []
     for index, trip in enumerate(_varied(sorted(found, key=lambda f: _priced(f).price or float("inf")))[:limit]):
@@ -126,12 +125,9 @@ def cheapest_dates(
 ) -> dict:
     """Lowest price per departure date in a range, cheapest first. missing_dates lists the dates whose page
     failed to load, so they are unknown rather than without flights."""
-    try:
-        query, days = params.date_search(origin, destination, start_date, end_date, trip_days, adults, max_stops,
-                                         currency)
-        found, missing = search.dates(query, days, trip_days)
-    except Exception as e:  # noqa: BLE001 - the agent gets the error instead of an exception
-        return {"error": f"{type(e).__name__}: {e}"[:400]}
+    query, days = params.date_search(origin, destination, start_date, end_date, trip_days, adults, max_stops,
+                                     currency)
+    found, missing = search.dates(query, days, trip_days)
     rows = [{"date": day, **({"return": back} if back else {}), "price": price}
             for day, back, price in sorted(found, key=lambda d: d[2])[:limit]]
     out = {"currency": currency, "count": len(rows), "dates": rows}
@@ -144,10 +140,12 @@ def cheapest_dates(
 
 @tool()
 def find_airports(
-    query: Annotated[str, "IATA or ICAO code, city, airport name or country"],
+    query: Annotated[str, "IATA or ICAO code, city (also in Spanish: Londres), airport name or country"],
     limit: Annotated[int, Range(1, 20)] = 5,
 ) -> dict:
-    """Finds airports by code, city, name or country: code, name, city and country of each, best match first."""
+    """Finds airports by code, city, name or country: code, name, city and country of each, best match first.
+    A city with several airports, by name or by its IATA city code (BUE, LON), gives all of them first; the
+    flight tools take those airport codes, not the city code."""
     return {"airports": airports.search(query, limit)}
 
 

@@ -6,13 +6,22 @@ import time
 import unittest
 from typing import Annotated
 
-from letsfly import mcp
+from letsfly import errors, mcp
 
 @mcp.tool("test_wait")
 def wait(seconds: Annotated[float, "How long to wait"], tag: Annotated[str, mcp.Range(), "Echoed back"] = "") -> dict:
     """Waits, then echoes the tag."""
     time.sleep(seconds)
     return {"tag": tag}
+
+
+@mcp.tool("test_fail")
+def fail() -> dict:
+    """Raises a city code error, from a KeyError."""
+    try:
+        return {}["BUE"]
+    except KeyError as e:
+        raise errors.CityCode("'BUE' is a city code", "origin", "EZE,AEP") from e
 
 
 def converse(*messages):
@@ -54,8 +63,20 @@ class Server(unittest.TestCase):
     def test_invalid_arguments_are_a_tool_error(self):
         reply = converse(call(1, "test_wait", {"seconds": "soon", "extra": 1}))[0]["result"]
         self.assertTrue(reply["isError"])
-        self.assertIn("seconds: expected number", reply["content"][0]["text"])
-        self.assertIn("extra: unknown parameter", reply["content"][0]["text"])
+        error = reply["structuredContent"]["error"]
+        self.assertEqual((error["type"], error["param"]), ("invalid_arguments", "extra"))
+        self.assertIn("seconds: expected number", error["message"])
+        self.assertIn("extra: unknown parameter", json.loads(reply["content"][0]["text"])["error"]["message"])
+
+    def test_what_a_tool_raises_comes_back_as_its_error_object(self):
+        by_id = {r["id"]: r["result"] for r in converse(call(1, "test_fail", {}), call(2, "nope", {}))}
+        want = {"type": "city_code", "message": "'BUE' is a city code", "param": "origin", "hint": "EZE,AEP",
+                "cause": "KeyError: 'BUE'"}
+        self.assertTrue(by_id[1]["isError"])
+        self.assertEqual(by_id[1]["structuredContent"], {"error": want})
+        self.assertEqual(fail(), {"error": want})
+        self.assertEqual(by_id[2]["structuredContent"]["error"]["type"], "unknown_tool")
+        self.assertFalse(converse(call(3, "test_wait", {"seconds": 0}))[0]["result"]["isError"])
 
 
 if __name__ == "__main__":

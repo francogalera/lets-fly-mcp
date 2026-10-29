@@ -32,6 +32,11 @@ def check(name, ok, detail=""):
         failures.append(name)
 
 
+def problem(data):
+    """The message of a tool's error object, or why there is nothing to show."""
+    return data["error"]["message"] if "error" in data else "no results"
+
+
 def leftovers(pid):
     found = []
     for cmd in (["ps", "-a"], ["network", "ls"]):
@@ -121,7 +126,7 @@ def main():
         rows = data.get("flights", [])
         check("MCP: search_flights round trip, links on the first 2 rows",
               bool(rows) and all("back" in r for r in rows) and [i for i, r in enumerate(rows) if r.get("link")] == [0, 1],
-              f"{len(rows)} options, from USD {rows[0]['price']:.0f}" if rows else data.get("error", "no results"))
+              f"{len(rows)} options, from USD {rows[0]['price']:.0f}" if rows else problem(data))
         check("MCP: search_flights with layovers and operator per direction",
               bool(rows) and all({"layovers", "operated_by"} <= r[d].keys() for r in rows for d in ("out", "back")))
         check("MCP: short reply (under 4000 characters)", len(text) < 4000, f"{len(text)} characters")
@@ -129,7 +134,7 @@ def main():
             "origin": ROUTE[0], "destination": ROUTE[1], "start_date": DATE, "end_date": RANGE_END, "trip_days": 10}})["result"]
         data = res.get("structuredContent") or json.loads(res["content"][0]["text"])
         check("MCP: cheapest_dates", bool(data.get("dates")), f"{len(data.get('dates', []))} dates" if data.get("dates")
-              else data.get("error", "no results"))
+              else problem(data))
         res = mcp.call("tools/call", {"name": "promociones-aereas", "arguments": {"limit": 5, "details": False}})["result"]
         text = res["content"][0]["text"]
         deals = json.loads(text).get("deals", [])

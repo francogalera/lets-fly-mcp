@@ -10,6 +10,8 @@ import xml.etree.ElementTree as ET
 from datetime import timedelta, timezone
 from email.utils import parsedate_to_datetime
 
+from letsfly import errors
+
 # A WordPress deals blog. The list comes from its search RSS feed and the details from each post's
 # HTML. Requests to the site are at least 20 s apart, as its robots.txt asks of AI bots, and posts
 # already read stay in memory for the session.
@@ -24,6 +26,9 @@ _cache: dict = {}
 AR_TIME = timezone(timedelta(hours=-3))  # Argentina has no daylight saving time
 BOILERPLATE = re.compile(r"^(Les dejo|Dejamos opciones|¡Recib|Descarg|Subscrib|Continuar a la nota)", re.I)
 EMOJI = re.compile("[\U0001F000-\U0001FAFF☀-➿⬀-⯿️‍]")
+# Links decode only references that end in ";" (&amp;, &#038;): the blog writes some with a raw &currency=, which
+# html.unescape reads as the legacy entity &curren (¤) while a browser leaves it alone inside an attribute
+REFERENCE = re.compile(r"&(?:#\d+|#x[0-9a-fA-F]+|[A-Za-z]+);")
 
 
 def _get(url):
@@ -37,11 +42,11 @@ def _get(url):
                 request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
                 with urllib.request.urlopen(request, timeout=30) as response:
                     return response.read().decode("utf-8", "replace")
-            except urllib.error.HTTPError:
-                raise
-            except (ConnectionError, TimeoutError, urllib.error.URLError):
+            except urllib.error.HTTPError as e:
+                raise errors.BlogError(f"The blog answered HTTP {e.code} for {url}") from e
+            except (ConnectionError, TimeoutError, urllib.error.URLError) as e:
                 if attempt == 2:
-                    raise
+                    raise errors.BlogError(f"Could not reach the blog for {url}, twice") from e
             finally:
                 _last[0] = time.monotonic()
 
@@ -49,6 +54,10 @@ def _get(url):
 def _plain(fragment):
     text = html.unescape(re.sub(r"<[^>]+>", " ", fragment))
     return re.sub(r"\s+", " ", EMOJI.sub("", text)).strip()
+
+
+def _href(raw):
+    return REFERENCE.sub(lambda m: html.unescape(m.group()), raw)
 
 
 def _price(title):
@@ -80,7 +89,7 @@ def _item(item):
 
 def _details(url, month, stay_days):
     if "/alojamientos/" in url:
-        return {"error": "the site's robots.txt asks not to read /alojamientos/"}
+        raise errors.BlogForbidden("The site's robots.txt asks not to read /alojamientos/")
     if url not in _cache:
         _cache[url] = _get(url)
     page = _cache[url]
@@ -104,7 +113,7 @@ def _details(url, month, stay_days):
         href = re.search(r"href=[\"']([^\"']+)[\"']", a)
         if not href:
             continue
-        link = html.unescape(href.group(1))
+        link = _href(href.group(1))
         if "Ver este Paquete" in a:
             q = urllib.parse.parse_qs(urllib.parse.urlsplit(link).query)
             when = re.findall(r"\d{4}-\d{2}-\d{2}", link)
@@ -130,7 +139,7 @@ def _details(url, month, stay_days):
             if stay_days and not (days and abs(int(days.group(1)) - stay_days) <= 1):
                 continue
             stops = re.search(r"class='escala[^']*'>([^<]+)<", row)
-            href = html.unescape(link.group(1))
+            href = _href(link.group(1))
             template = href.replace(go, "{out}").replace(back, "{back}")
             if template not in templates:
                 templates.append(template)
@@ -151,10 +160,11 @@ def _details(url, month, stay_days):
 def search(query, type, page, limit, details, month, stay_days):
     path = f"/page/{page}/" if page > 1 else "/"
     url = f"{SITE}{path}?" + urllib.parse.urlencode({"s": query, "feed": "rss2"}) if query else f"{SITE}/feed" + (f"?paged={page}" if page > 1 else "")
+    text = _get(url)
     try:
-        feed = ET.fromstring(_get(url))
-    except Exception as e:  # noqa: BLE001
-        return {"error": f"{_name(e)}: {e}"[:300]}
+        feed = ET.fromstring(text)
+    except ET.ParseError as e:
+        raise errors.BlogUnreadable(f"The blog's feed is not valid XML ({url})") from e
     items = [_item(i) for i in feed.findall("./channel/item")]
     items = [i for i in items if type == "any" or i["type"] == type][:limit]
     if details:
@@ -162,8 +172,8 @@ def search(query, type, page, limit, details, month, stay_days):
             try:
                 item["details"] = _details(item["url"], month, stay_days)
                 _fix_seen_at(item)
-            except Exception as e:  # noqa: BLE001
-                item["details"] = {"error": f"{_name(e)}: {e}"[:300]}
+            except Exception as e:  # noqa: BLE001 - one deal that fails keeps the others
+                item["details"] = errors.result(e)
     return {"source": SITE, "count": len(items), "deals": items}
 
 
@@ -177,7 +187,3 @@ def _fix_seen_at(item):
     if published.startswith(f"{y:04d}-{m:02d}-{d:02d}") and hour < 12 and hour + 12 <= int(published[11:13]) + 1:
         hour += 12
     item["details"]["prices_seen_at"] = f"{y:04d}-{m:02d}-{d:02d} {hour:02d}:{minute:02d}"
-
-
-def _name(e):
-    return e.__class__.__name__

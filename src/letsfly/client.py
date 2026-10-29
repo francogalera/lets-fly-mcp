@@ -3,6 +3,8 @@ import threading
 import time
 from urllib.parse import urlparse
 
+from letsfly.errors import FlightsError
+
 RATE = 10
 ATTEMPTS = 3
 TIMEOUT = 60
@@ -15,28 +17,29 @@ _next_start = [0.0]
 _spacing = threading.Lock()
 
 
-class SearchClientError(Exception):
-    pass
+class SearchClientError(FlightsError):
+    kind = "google"
 
 
 class SearchTimeoutError(SearchClientError):
-    pass
+    kind = "google_timeout"
 
 
 class SearchConnectionError(SearchClientError):
-    pass
+    kind = "google_connection"
 
 
 class SearchCertificateError(SearchConnectionError):
-    pass
+    kind = "google_certificate"
 
 
 class SearchHTTPError(SearchClientError):
-    pass
+    kind = "google_http"
 
 
 class SearchParseError(SearchClientError):
     """A page arrived but could not be read."""
+    kind = "google_page"
 
 
 def fetch(url: str) -> str:

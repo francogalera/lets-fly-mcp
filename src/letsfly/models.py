@@ -2,13 +2,17 @@
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 
-
-class ParseError(ValueError):
-    """An airport, airline, window or currency the user typed that cannot be read."""
+from letsfly.errors import FlightsError
 
 
-class ValidationError(ValueError):
+class ParseError(FlightsError, ValueError):
+    """An airline, window, currency or date the user typed that cannot be read."""
+    kind = "invalid_input"
+
+
+class ValidationError(FlightsError, ValueError):
     """A request that reads fine but cannot be searched; the message starts with the field at fault."""
+    kind = "invalid_request"
 
 
 def today() -> date:
