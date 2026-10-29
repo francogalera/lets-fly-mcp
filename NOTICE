@@ -1,0 +1,26 @@
+Lets fly includes code derived from fli (https://github.com/punitarani/fli), MIT license,
+Copyright (c) 2025 Punit Arani. The license text is in LICENSE-fli.
+
+Origin: fli as of 2026-09-20. Paths on the right are fli's.
+
+src/letsfly/client.py       fli/search/client.py, fli/search/_concurrency.py (token bucket),
+                            fli/search/exceptions.py
+src/letsfly/tfs.py          fli/search/_proto.py, fli/search/_tfs.py (build_tfs, page_url),
+                            fli/search/flights.py (build_flight_booking_url), fli/core/links.py
+src/letsfly/page.py         fli/search/_tfs.py (extract_payload, fetch_payload)
+src/letsfly/decode.py       fli/search/_decoders.py, fli/search/_helpers.py,
+                            fli/models/google_flights/base.py (FlightLeg, FlightResult)
+src/letsfly/search.py       fli/search/flights.py, fli/search/dates.py,
+                            fli/search/_tfs.py (apply_client_side_filters), fli/search/_concurrency.py
+src/letsfly/params.py       fli/core/parsers.py, fli/core/builders.py, the validators in
+                            fli/models/google_flights/base.py, fli/models/google_flights/flights.py
+                            and fli/models/google_flights/dates.py
+src/letsfly/airports.py     fli/core/airports.py, fli/core/parsers.py (resolve_airport, icao_to_iata)
+src/letsfly/models.py       fli/models/google_flights/base.py (utc_today)
+src/letsfly/tools.py        search_flights, cheapest_dates and find_airports: fli/mcp/server.py
+                            (_execute_date_search, _search_error_message, _find_airports_impl),
+                            fli/core/errors.py (format_validation_error)
+
+src/letsfly/data/airports.csv comes from OurAirports (https://ourairports.com/data/, public domain),
+downloaded 2026-10-28 and rebuilt with bin/airports.py: airports with an IATA code, their ICAO code,
+name, city, country, size and whether they have scheduled service.

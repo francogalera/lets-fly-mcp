@@ -1,0 +1,116 @@
+#!/usr/bin/env bash
+# flights: searches flights on Google Flights with letsfly (lets-fly) inside Docker.
+#
+#   flights search|dates|airports ...   the MCP searches in the terminal (flights --help)
+#   flights audit                       live data checks against Google: pair prices, dates, a burst
+#   flights mcp                         the MCP over stdio, for the flights subagent
+#   flights build                       builds both images (core and proxy)
+#   flights selftest                    live check: searches, MCP, network blocking and cleanup
+#   flights test                        offline tests: recordings against the reference, and unit tests
+#   flights image                       tag of the core image (the selftest uses it)
+#   flights upstream [REF]              what changed in fli since the commit our code derives from, read only
+#
+# Isolation: no container mounts anything from this machine. The core runs with a read-only file
+# system, no privileges, on an internal network of its own per session whose only way out is the
+# proxy, which lets HTTPS through only to www.google.com and promociones-aereas.com.ar. On exit, its
+# log is appended to ~/.local/state/flights/egress.log and both containers and the network are removed.
+set -euo pipefail
+
+HERE="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
+# Tags follow the content: if something changed and was not rebuilt, startup says so
+IMAGE="lets-fly-core:$(cd "$HERE" && find src/letsfly docker -type f ! -path '*/__pycache__/*' -print0 | sort -z |
+  xargs -0 sha256sum | sha256sum | cut -c1-12)"
+PROXY_IMAGE="lets-fly-proxy:$(sha256sum "$HERE/docker/proxy.py" | cut -c1-12)"
+ALLOW=www.google.com,promociones-aereas.com.ar
+LOG="${XDG_STATE_HOME:-$HOME/.local/state}/flights/egress.log"
+SESSION="flights-$$-$RANDOM"
+PROXY=http://proxy:3128
+
+build() {
+  docker build -f "$HERE/docker/Dockerfile" --target proxy -t "$PROXY_IMAGE" "$HERE"
+  docker build -f "$HERE/docker/Dockerfile" --target core -t "$IMAGE" "$HERE"
+}
+
+save_log() {
+  mkdir -p "$(dirname "$LOG")"
+  docker logs "$1" 2>/dev/null | grep -v '^LISTEN' >> "$LOG" || true
+}
+
+# Leftovers of a run that died without cleaning up (kill -9, power cut): its process is gone
+sweep() {
+  local id pid role
+  docker ps -a --filter label=flights.pid --format '{{.ID}} {{.Label "flights.pid"}} {{.Label "flights.role"}}' |
+    while read -r id pid role; do
+      kill -0 "$pid" 2>/dev/null && continue
+      [ "$role" = proxy ] && save_log "$id"
+      docker rm -f "$id" >/dev/null 2>&1 || true
+    done
+  docker network ls --filter label=flights.pid --format '{{.ID}} {{.Label "flights.pid"}}' |
+    while read -r id pid; do kill -0 "$pid" 2>/dev/null || docker network rm "$id" >/dev/null 2>&1 || true; done
+}
+
+cleanup() {
+  save_log "$SESSION-proxy"
+  docker rm -f "$SESSION-core" "$SESSION-proxy" >/dev/null 2>&1 || true
+  docker network rm "$SESSION" >/dev/null 2>&1 || true
+}
+
+start_proxy() {
+  docker run -d --rm --init --pull never --name "$SESSION-proxy" --label "flights.pid=$$" --label flights.role=proxy \
+    --cap-drop=ALL --security-opt=no-new-privileges --read-only --memory=128m --pids-limit=64 \
+    "$PROXY_IMAGE" 3128 "$ALLOW" "$SESSION" >/dev/null
+  docker network connect --alias proxy "$SESSION" "$SESSION-proxy"
+}
+
+# $1: mcp or cli. The rest is the command inside the container
+run_core() {
+  local mode="$1" opts=()
+  shift
+  if [ "$mode" = mcp ]; then
+    opts=(-i)
+  elif [ -t 1 ]; then
+    opts=(-e "COLUMNS=$(tput cols 2>/dev/null || echo 120)" -e FORCE_COLOR=1)
+  fi
+  docker run --rm --init --pull never "${opts[@]}" --name "$SESSION-core" --label "flights.pid=$$" \
+    --network "$SESSION" -e "HTTPS_PROXY=$PROXY" -e "https_proxy=$PROXY" -e "HTTP_PROXY=$PROXY" -e "http_proxy=$PROXY" \
+    --read-only --tmpfs /tmp:size=64m --cap-drop=ALL --security-opt=no-new-privileges \
+    --memory=512m --pids-limit=128 \
+    "$IMAGE" "$@"
+}
+
+case "${1:-}" in
+  build) build; exit ;;
+  image) echo "$IMAGE"; exit ;;
+  selftest) exec python3 -I "$HERE/tests/selftest.py" "$HERE/bin/flights" ;;
+  test) shift; exec "$HERE/tests/run.sh" "$IMAGE" "$@" ;;
+  upstream) shift; exec python3 -I "$HERE/bin/upstream.py" "$HERE" "$@" ;;
+  "") set -- --help ;;
+esac
+
+sweep
+trap cleanup EXIT
+docker network create --internal --label "flights.pid=$$" "$SESSION" >/dev/null
+
+# The core starts first and the proxy comes up meanwhile. docker runs in the background so that a
+# signal (Claude Code stops the MCP with SIGTERM) reaches this script, which removes the containers
+# right away. The MCP needs its stdin, passed through fd 3
+if [ "$1" = mcp ]; then
+  exec 3<&0
+  run_core mcp python -I -m letsfly.tools <&3 &
+else
+  run_core cli python -I -m letsfly "$@" &
+fi
+child=$!
+trap 'cleanup; kill -TERM "$child" 2>/dev/null || true' TERM INT HUP
+if ! start_proxy; then
+  echo "flights: the proxy did not start; if the images are missing, run: flights build" >&2
+  cleanup
+  exit 1
+fi
+rc=0
+wait "$child" || rc=$?
+# A signal interrupts the first wait; the second one waits for docker to really finish
+if kill -0 "$child" 2>/dev/null; then wait "$child" || rc=$?; fi
+# 125 is a docker error before the core starts, almost always a missing image
+[ "$rc" != 125 ] || echo "flights: if the image $IMAGE is missing, run: flights build" >&2
+exit "$rc"
