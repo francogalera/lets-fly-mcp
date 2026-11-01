@@ -1,12 +1,11 @@
-"""Turns one result row of the ds:1 data into an Itinerary, reading positions as fli mapped them."""
+"""Turns one result row of Google's ds:1 data into an Itinerary."""
 from datetime import datetime, time
 
 from letsfly.models import Itinerary, Layover, Leg
 
-# A layover that crosses midnight or starts before this time is overnight
 NIGHT_ENDS = time(5)
-# A malformed row raises; plain indexing keeps fli's exception types, which decide whether the row is skipped
-# or the whole search fails (an IndexError only gets past the flight search, not the date sweep)
+# A malformed row raises, and plain indexing raises on purpose: the exception type decides whether the row is
+# skipped or the whole search fails (an IndexError only gets past the flight search, not the date sweep)
 
 
 def itinerary(row) -> Itinerary:
@@ -52,19 +51,19 @@ def _leg(fl) -> Leg:
 def _price(row):
     block = _at(row, 1)
     if not isinstance(block, list):
-        raise ValueError("price block missing: skip row")
+        raise ValueError("no price block")
     try:
         head = block[0]
         if not isinstance(head, list):
-            raise ValueError("price head is not a list")
+            raise ValueError("the price is not in a list")
         if not head:
             return None
         raw = head[-1]
         if isinstance(raw, bool) or not isinstance(raw, int | float):
-            raise ValueError(f"price field is not numeric: {raw!r}")
+            raise ValueError(f"the price is not a number: {raw!r}")
         return float(raw)
     except (IndexError, TypeError) as e:
-        raise ValueError(f"malformed price block: {e}") from e
+        raise ValueError(f"unreadable price: {e}") from e
 
 
 def _bags(row):
@@ -83,7 +82,7 @@ def _airport(code):
 
 def _datetime(day, time):
     if not any(x is not None for x in day) or not any(x is not None for x in time):
-        raise ValueError("Date and time arrays must contain at least one non-None value")
+        raise ValueError("a leg without its date or time")
     return datetime(*(x or 0 for x in day), *(x or 0 for x in time))
 
 

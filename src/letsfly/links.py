@@ -1,4 +1,4 @@
-"""Short links: the tools hand out file:///.../flights/l/<id>.html instead of booking links of ~300 characters,
+"""Short links: the tools hand out file:///.../flight-links/<id>.html instead of booking links of ~300 characters,
 which the agent altered when copying them. The id is the hash of the url, so a page can only hold its own url.
 Standard library only: bin/flights also runs this file on the host, to write the pages from the core's stderr."""
 import base64

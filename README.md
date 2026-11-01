@@ -19,9 +19,10 @@ behind an MCP server, isolated in Docker.
     flights search EZE MIA 2026-12-10    also: dates, airports; --json prints what the agent gets
     flights mcp                          the MCP server over stdio
     flights test                         offline tests inside the image
-    flights selftest                     live check: searches, MCP, network blocking, cleanup
+    flights selftest                     live check: searches, MCP and its schemas, network blocking, cleanup
     flights audit                        live data checks against Google: pair prices, dates, a burst
-    flights upstream                     what changed in fli since the commit we derive from, read only
+    flights build                        rebuild both images after changing src/ or docker/
+    flights image                        tag of the core image, which follows the content of src/ and docker/
 
 ## Isolation
 
@@ -31,17 +32,25 @@ Every egress attempt is logged to `~/.local/state/flights/egress.log`.
 
 ## Links
 
-The tools hand out short local links, `file:///home/<you>/.local/state/flights/l/<id>.html`, instead of booking
+The tools hand out short local links, `file://<repo>/local/flight-links/<id>.html`, instead of booking
 links of about 300 characters, which the agent sometimes altered when it copied them. Each page redirects to the
 real link. The core prints `LINK <id> <url>` on stderr, and `bin/flights` pipes it through `src/letsfly/links.py`,
 which writes the page only when `<id>` is the hash of `<url>`. The container still mounts nothing.
 
+## Schemas
+
+Each tool publishes an `outputSchema` built from the `TypedDict` it returns, with a description per field, plus
+the error object every tool can return instead. Claude Code (checked on 2.1.316) shows the model only the tool's
+description and input schema, and let a result that broke its `outputSchema` through untouched. So each tool's
+docstring says what the agent needs to read the answer, and the schema is the contract for clients that do
+check results, as MCP asks them to: output objects accept extra fields, and the tests keep every output inside it.
+
 ## Tests
 
-`tests/replay` keeps recorded pages (the `ds:1` blob and each row's aria-label) and the reference output
-of the 4 tools. A refactor must reproduce it exactly; a behavior change updates `reference.json`.
+`flights test` runs offline. A few `ds:1` rows written by hand pin the decode: the pair price, the operator, the
+bags, the airport change, `overnight` and `self_transfer`. The output of the 4 tools and every error kind are
+checked against the published schemas, which `flights selftest` also does with live replies.
 
 ## Credits
 
-Part of the code derives from [fli](https://github.com/punitarani/fli) by Punit Arani (MIT), credited in
-`LICENSE`. Airport data comes from [OurAirports](https://ourairports.com/data/) (public domain).
+Airport data comes from [OurAirports](https://ourairports.com/data/) (public domain).

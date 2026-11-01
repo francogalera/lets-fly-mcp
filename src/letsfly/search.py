@@ -5,15 +5,14 @@ from dataclasses import dataclass
 from datetime import timedelta
 
 from letsfly import decode, models, page, tfs
-from letsfly.client import SearchClientError, SearchParseError
+from letsfly.client import SearchError, SearchUnreadable
 
 POOL = ThreadPoolExecutor(max_workers=10, thread_name_prefix="letsfly")
 TOP_N = 5
 MAX_DATES = 93
 # Pages without ds:1, before any date loaded, that abandon a sweep: a blocked client fails every date alike
-SWEEP_FAILURE_THRESHOLD = 5
-NO_PAYLOAD = ("the search page carried no ds:1 payload: Google may have changed the page shape, or served a "
-              "consent/blocked page instead")
+BLOCKED_PAGES_LIMIT = 5
+NO_PAYLOAD = "the results page had no ds:1 data: Google changed the page, or sent a consent or blocking page"
 CONSENT_HINT = ". From an EU/EEA IP Google may serve its consent page, which has no results"
 
 
@@ -24,10 +23,10 @@ def flights(search):
     if not outbounds or len(search.dates) == 1:
         return outbounds or [], 0
     expanded = list(POOL.map(lambda outbound: _returns(search, outbound), outbounds[:TOP_N]))
-    errors = [backs for _, backs in expanded if isinstance(backs, SearchClientError)]
+    errors = [backs for _, backs in expanded if isinstance(backs, SearchError)]
     if len(errors) == len(expanded):
         raise errors[0]
-    pairs = [(outbound, back) for outbound, backs in expanded if not isinstance(backs, SearchClientError)
+    pairs = [(outbound, back) for outbound, backs in expanded if not isinstance(backs, SearchError)
              for back in backs or []]
     return pairs, len(errors)
 
@@ -35,19 +34,18 @@ def flights(search):
 def _returns(search, outbound):
     try:
         return outbound, _fetch(search, outbound)
-    except SearchClientError as e:
+    except SearchError as e:
         return outbound, e
 
 
 def _fetch(search, outbound=None):
     data = page.fetch_ds1(tfs.search_page(search, search.dates, outbound))
     if data is None:
-        raise SearchParseError("Search page carried no ds:1 payload: Google may have changed the page shape, "
-                               "or served a consent/blocked page instead.")
+        raise SearchUnreadable(NO_PAYLOAD[0].upper() + NO_PAYLOAD[1:])
     try:
         rows = [row for index in (2, 3) if isinstance(data[index], list) for row in data[index][0]]
     except (IndexError, TypeError) as e:
-        raise SearchParseError(f"Shopping response shape changed: no flights array at inner[2]/[3]: {e}") from e
+        raise SearchUnreadable(f"The ds:1 data has no flight rows at index 2 or 3: {e}") from e
     found, reasons = [], []
     for row in rows:
         try:
@@ -56,8 +54,8 @@ def _fetch(search, outbound=None):
             if (reason := f"{type(e).__name__}: {e}") not in reasons and len(reasons) < 3:
                 reasons.append(reason)
     if rows and not found:
-        raise SearchParseError(f"Parsed 0/{len(rows)} flight rows: Google response shape may have changed "
-                               f"(sample reasons: {'; '.join(reasons)})")
+        raise SearchUnreadable(f"None of the {len(rows)} flight rows could be read, so Google probably changed their "
+                              f"layout. For example: {'; '.join(reasons)}")
     found = [itinerary for itinerary in found if _keep(itinerary, search)]
     found.sort(key=lambda itinerary: (itinerary.price is None, itinerary.price))
     return found or None
@@ -92,9 +90,8 @@ def dates(search, days, trip_days=None):
     """Cheapest price per departure day, one page each: ([(day, return day or None, price)], days that failed)."""
     if len(days) > MAX_DATES:
         raise models.ValidationError(
-            f"This date search covers {len(days)} dates, above the {MAX_DATES}-date limit. Google's search page serves "
-            "no calendar grid, so every date costs its own full page fetch. Narrow the range (or run several smaller "
-            "searches).", "end_date", f"Split the range into searches of {MAX_DATES} dates or fewer")
+            f"The range has {len(days)} dates and the limit is {MAX_DATES}: each date costs a whole Google page",
+            "end_date", f"Split the range into searches of {MAX_DATES} dates or fewer")
     health = _Health(threading.Lock())
     outcomes = list(POOL.map(lambda day: _price_day(search, day, trip_days, health), days))
     return _collect(outcomes, len(days), health.skipped)
@@ -105,7 +102,7 @@ def _price_day(search, day, trip_days, health):
     if day < models.today() - timedelta(days=1):
         return _Day(day.isoformat(), attempted=False)
     with health.lock:
-        if not health.loaded and health.blocked >= SWEEP_FAILURE_THRESHOLD:
+        if not health.loaded and health.blocked >= BLOCKED_PAGES_LIMIT:
             health.skipped += 1
             return _Day(day.isoformat(), attempted=False, failure="skipped after repeated blocked pages")
     url = tfs.search_page(search, [d.strftime("%Y-%m-%d") for d in travel])
@@ -151,20 +148,19 @@ def _collect(outcomes, total, skipped):
     tripped = skipped > 0
     everything_failed = bool(attempted) and len(failed) == len(attempted)
     blocked = bool(failed) and all(day.failure == NO_PAYLOAD for day in failed)
-    error = SearchParseError if blocked or tripped else SearchClientError
+    error = SearchUnreadable if blocked or tripped else SearchError
+    why = "; ".join(reasons)
     if not results and (everything_failed or tripped):
         if everything_failed:
-            message = f"Priced 0 of {total} dates: every date in the range failed. Reasons: {'; '.join(reasons)}"
+            message = f"None of the {total} dates loaded. Why: {why}"
         else:
-            message = (f"Priced 0 of {total} dates: no date in the range could be priced. "
-                       f"Reasons: {'; '.join(reasons) or 'no flights on the dates that loaded'}")
+            message = f"No price for any of the {total} dates. Why: {why or 'the dates that loaded had no flights'}"
         if tripped:
-            message += (f". Gave up after {len(attempted)} of {total} dates ({skipped} skipped): a sweep that has not "
-                        "loaded a single page is failing for the same reason on every date, and each one costs several "
-                        "requests")
+            message += (f". Stopped after {len(attempted)} of {total} dates, {skipped} skipped: when no page at all "
+                        "loads, every date fails the same way and each one costs several requests")
         raise error(message + (CONSENT_HINT if blocked or tripped else ""))
     if not results and failed and len(failed) >= loaded:
-        raise (SearchParseError if blocked else SearchClientError)(
-            f"Priced 0 of {total} dates: {len(failed)} of the {len(attempted)} dates tried failed to load, so "
-            f'"no flights" cannot be concluded from the {loaded} that did. Reasons: {"; ".join(reasons)}')
+        raise (SearchUnreadable if blocked else SearchError)(
+            f"No price for any of the {total} dates, and {len(failed)} of the {len(attempted)} tried did not load: "
+            f"the {loaded} that loaded are too few to say there are no flights. Why: {why}")
     return results, [day.day for day in outcomes if day.failure]

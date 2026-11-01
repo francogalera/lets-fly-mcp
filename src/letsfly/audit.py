@@ -1,4 +1,4 @@
-"""Live audit against Google: the data checks of the 2026-10-28 audit, rerun on demand through the proxy."""
+"""Live data checks against Google through the proxy: pair prices, date sweeps and a burst of requests."""
 import html
 import re
 import sys

@@ -12,12 +12,9 @@ from email.utils import parsedate_to_datetime
 
 from letsfly import errors, links
 
-# A WordPress deals blog. The list comes from its search RSS feed and the details from each post's
-# HTML. Requests to the site are at least 20 s apart, as its robots.txt asks of AI bots, and posts
-# already read stay in memory for the session.
 SITE = "https://promociones-aereas.com.ar"
 USER_AGENT = "flights-mcp/1 (personal use)"
-GAP = 20
+GAP = 5
 MAX_DATES = 60
 KINDS = {"pa": "package", "rt": "flight", "ow": "flight", "ho": "hotel", "au": "car", "ac": "activity"}
 _last = [0.0]
@@ -108,7 +105,6 @@ def _details(url, month, stay_days):
     badges = [_plain(b) for b in re.findall(r'<div class="bg-[^"]*rounded-lg[^"]*">([^<]{2,60})</div>', intro)]
     if badges:
         out["badges"] = list(dict.fromkeys(badges))
-    # Packages: featured hotel cards ("Ver este Paquete") and links for other room occupancies
     for a in re.findall(r"<a\s[^>]*>.*?</a>", intro, re.S):
         href = re.search(r"href=[\"']([^\"']+)[\"']", a)
         if not href:
