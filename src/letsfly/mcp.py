@@ -1,14 +1,10 @@
-"""Minimal MCP server over stdio: initialize, ping, tools/list and tools/call, one protocol version.
-
-Each tool is a function registered with @tool. Its schema comes from the type hints: Annotated carries
-the description (a str) and the bounds (Range). Arguments are checked against that schema before the
-call, calls run in parallel, and a lock keeps two replies from interleaving on stdout. @tool is also the
-one place errors are handled: what a tool raises comes back as {"error": ...} from letsfly.errors, over
-MCP with isError and to direct callers (the terminal, the audit, the tests) alike.
-"""
+"""Minimal MCP server over stdio, one protocol version. Schemas come from type hints: Annotated carries the
+description (a str) and bounds (Range). A client may check results against outputSchema, so output objects allow
+extra fields and every tool's schema also takes the error object @tool returns instead of raising."""
 import functools
 import inspect
 import json
+import re
 import sys
 import threading
 import types
@@ -20,6 +16,7 @@ from letsfly import errors
 
 PROTOCOL = "2025-06-18"
 READ_ONLY = {"readOnlyHint": True, "idempotentHint": True}
+TYPES = {str: "string", int: "integer", bool: "boolean", float: "number", type(None): "null", dict: "object"}
 _tools = {}
 _out = threading.Lock()
 
@@ -38,7 +35,7 @@ def tool(name=None):
                 return fn(*args, **kwargs)
             except Exception as e:  # noqa: BLE001 - the agent gets the error as an object instead of an exception
                 return errors.result(e)
-        _tools[name or fn.__name__] = (call, _input_schema(fn))
+        _tools[name or fn.__name__] = (call, _input_schema(fn), _output_schema(fn))
         return call
     return register
 
@@ -55,20 +52,31 @@ def _input_schema(fn):
     return {"type": "object", "properties": props, "required": required, "additionalProperties": False}
 
 
+def _output_schema(fn):
+    returns = typing.get_type_hints(fn, include_extras=True)["return"]
+    return {"type": "object", "anyOf": [_schema(returns), _schema(errors.Failure)]}
+
+
 def _schema(hint):
     meta = []
-    if typing.get_origin(hint) is typing.Annotated:
-        hint, *meta = typing.get_args(hint)
+    while typing.get_origin(hint) in (typing.Annotated, typing.NotRequired, typing.Required):
+        hint, *extra = typing.get_args(hint)
+        meta += extra
     origin, args = typing.get_origin(hint), typing.get_args(hint)
     if origin in (typing.Union, types.UnionType):
-        inner = [a for a in args if a is not type(None)]
-        schema = {"anyOf": [_schema(inner[0]), {"type": "null"}]}
+        schema = {"anyOf": [_schema(a) for a in args]}
     elif origin is typing.Literal:
         schema = {"type": "string", "enum": list(args)}
     elif origin is list:
         schema = {"type": "array", "items": _schema(args[0])}
+    elif origin is dict:
+        schema = {"type": "object", "additionalProperties": _schema(args[1])}
+    elif typing.is_typeddict(hint):
+        fields = typing.get_type_hints(hint, include_extras=True)
+        schema = {"type": "object", "properties": {k: _schema(v) for k, v in fields.items()},
+                  "required": [k for k in fields if k in hint.__required_keys__], "additionalProperties": True}
     else:
-        schema = {"type": {str: "string", int: "integer", bool: "boolean", float: "number"}[hint]}
+        schema = {"type": TYPES[hint]}
     for m in meta:
         if isinstance(m, str):
             schema["description"] = m
@@ -81,37 +89,54 @@ def _schema(hint):
     return schema
 
 
-def _invalid(value, schema, name):
+def problems(value, schema, path=""):
+    """Where value breaks schema, as (path, message) pairs; empty when it fits."""
+    kind = schema.get("type")
+    if kind and not _is(value, kind):
+        return [(path, f"{path or 'value'}: expected {kind}")]
     if "anyOf" in schema:
-        return None if value is None else _invalid(value, schema["anyOf"][0], name)
-    kind = schema["type"]
-    ok = {"string": isinstance(value, str), "boolean": isinstance(value, bool),
-          "integer": isinstance(value, int) and not isinstance(value, bool),
-          "number": isinstance(value, int | float) and not isinstance(value, bool),
-          "array": isinstance(value, list)}[kind]
-    if not ok:
-        return f"{name}: expected {kind}"
+        return _closest(value, schema["anyOf"], path)
     if "enum" in schema and value not in schema["enum"]:
-        return f"{name}: must be one of {', '.join(schema['enum'])}"
+        return [(path, f"{path}: must be one of {', '.join(schema['enum'])}")]
     if "minimum" in schema and value < schema["minimum"] or "maximum" in schema and value > schema["maximum"]:
-        return f"{name}: out of range ({schema.get('minimum')} to {schema.get('maximum')})"
+        return [(path, f"{path}: out of range ({schema.get('minimum')} to {schema.get('maximum')})")]
     if kind == "array":
-        return next((e for i, v in enumerate(value) if (e := _invalid(v, schema["items"], f"{name}[{i}]"))), None)
-    return None
+        return [p for i, v in enumerate(value) for p in problems(v, schema["items"], f"{path}[{i}]")]
+    if kind != "object":
+        return []
+    props, extra = schema.get("properties", {}), schema.get("additionalProperties", True)
+    at = {k: f"{path}.{k}" if path else k for k in [*value, *schema.get("required", [])]}
+    found = [(at[k], f"{at[k]}: unknown parameter") for k in value if k not in props and extra is False]
+    found += [(at[k], f"{at[k]}: missing") for k in schema.get("required", []) if k not in value]
+    for k, v in value.items():
+        rule = props.get(k, extra if isinstance(extra, dict) else None)
+        found += problems(v, rule, at[k]) if rule else []
+    return found
+
+
+def _closest(value, branches, path):
+    """The problems of the branch that fits, else of the one sharing most keys with value, then with fewest."""
+    keys = set(value) if isinstance(value, dict) else set()
+    found = [(problems(value, b, path), len(keys & set(b.get("properties", {})))) for b in branches]
+    return min(found, key=lambda f: (bool(f[0]), -f[1], len(f[0])))[0]
+
+
+def _is(value, kind):
+    if kind in ("integer", "number") and isinstance(value, bool):
+        return False
+    return isinstance(value, {"string": str, "boolean": bool, "integer": int, "number": int | float, "array": list,
+                              "object": dict, "null": type(None)}[kind])
 
 
 def _call(params):
     name, args = params.get("name"), params.get("arguments") or {}
     if name not in _tools:
         return _reply(errors.result(errors.UnknownTool(f"Unknown tool {name}", "name")))
-    fn, schema = _tools[name]
-    problems = [(k, f"{k}: unknown parameter") for k in args if k not in schema["properties"]]
-    problems += [(k, f"{k}: missing") for k in schema["required"] if k not in args]
-    problems += [(k, e) for k, v in args.items() if k in schema["properties"]
-                 and (e := _invalid(v, schema["properties"][k], k))]
-    if problems:
-        message = "Invalid arguments: " + "; ".join(text for _, text in problems)
-        return _reply(errors.result(errors.InvalidArguments(message, problems[0][0])))
+    fn, schema, _ = _tools[name]
+    found = problems(args, schema)
+    if found:
+        message = "Invalid arguments: " + "; ".join(text for _, text in found)
+        return _reply(errors.result(errors.InvalidArguments(message, re.split(r"[.\[]", found[0][0])[0])))
     return _reply(fn(**args))
 
 
@@ -128,9 +153,9 @@ def _handle(msg):
     if method == "ping":
         return {}
     if method == "tools/list":
-        return {"tools": [{"name": n, "description": inspect.getdoc(fn) or "", "inputSchema": schema,
-                           "outputSchema": {"type": "object", "additionalProperties": True},
-                           "annotations": READ_ONLY} for n, (fn, schema) in _tools.items()]}
+        return {"tools": [{"name": n, "description": inspect.getdoc(fn) or "", "inputSchema": inputs,
+                           "outputSchema": outputs, "annotations": READ_ONLY}
+                          for n, (fn, inputs, outputs) in _tools.items()]}
     if method == "tools/call":
         return _call(params)
     raise LookupError(method)

@@ -1,21 +1,6 @@
 #!/usr/bin/env bash
-# flights: searches flights on Google Flights with letsfly (lets-fly) inside Docker.
-#
-#   flights search|dates|airports ...   the MCP searches in the terminal (flights --help)
-#   flights audit                       live data checks against Google: pair prices, dates, a burst
-#   flights mcp                         the MCP over stdio, for the flights subagent
-#   flights build                       builds both images (core and proxy)
-#   flights selftest                    live check: searches, MCP, network blocking and cleanup
-#   flights test                        offline tests: recordings against the reference, and unit tests
-#   flights image                       tag of the core image (the selftest uses it)
-#   flights upstream [REF]              what changed in fli since the commit our code derives from, read only
-#
-# Isolation: no container mounts anything from this machine. The core runs with a read-only file
-# system, no privileges, on an internal network of its own per session whose only way out is the
-# proxy, which lets HTTPS through only to www.google.com and promociones-aereas.com.ar. On exit, its
-# log is appended to ~/.local/state/flights/egress.log and both containers and the network are removed.
-# Links: the core hands out short file:// links and prints "LINK <id> <url>" on stderr; this script pipes
-# that stderr through src/letsfly/links.py, which writes each redirect page to ~/.local/state/flights/l.
+# flights: letsfly's terminal commands and MCP server, each run in its own sandbox in Docker.
+# Commands, isolation and links: README.md.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
@@ -25,7 +10,7 @@ IMAGE="lets-fly-core:$(cd "$HERE" && find src/letsfly docker -type f ! -path '*/
 PROXY_IMAGE="lets-fly-proxy:$(sha256sum "$HERE/docker/proxy.py" | cut -c1-12)"
 ALLOW=www.google.com,promociones-aereas.com.ar
 LOG="${XDG_STATE_HOME:-$HOME/.local/state}/flights/egress.log"
-LINKS="${XDG_STATE_HOME:-$HOME/.local/state}/flights/l"
+LINKS="$HERE/local/flight-links"
 SESSION="flights-$$-$RANDOM"
 PROXY=http://proxy:3128
 
@@ -86,7 +71,6 @@ case "${1:-}" in
   image) echo "$IMAGE"; exit ;;
   selftest) exec python3 -I "$HERE/tests/selftest.py" "$HERE/bin/flights" ;;
   test) shift; exec "$HERE/tests/run.sh" "$IMAGE" "$@" ;;
-  upstream) shift; exec python3 -I "$HERE/bin/upstream.py" "$@" ;;
   "") set -- --help ;;
 esac
 

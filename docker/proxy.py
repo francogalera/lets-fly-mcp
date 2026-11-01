@@ -1,11 +1,7 @@
 #!/usr/bin/env python3
-"""Egress proxy for flights: lets HTTPS through only to the allowed hosts and logs every attempt.
-
-Runs in its own image with nothing third-party, and is the only way out of the internal network the
-core lives on. Each attempt goes to stdout as `UTC-datetime ALLOW|BLOCK|ERROR host:port session`, and
-bin/flights collects it with docker logs on shutdown.
-Usage: proxy.py PORT HOST[,HOST...] SESSION
-"""
+"""Egress proxy for flights, the only way out of the core's network: lets HTTPS through only to the allowed hosts
+and logs each attempt to stdout as `UTC-datetime ALLOW|BLOCK|ERROR host:port session` for bin/flights to collect.
+Usage: proxy.py PORT HOST[,HOST...] SESSION"""
 import select
 import socket
 import sys

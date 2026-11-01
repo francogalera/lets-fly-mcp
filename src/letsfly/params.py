@@ -1,5 +1,4 @@
-"""Checks what the tools receive and builds the Search, with fli's rules and error messages; each error names
-the tool parameter at fault."""
+"""Checks what the tools receive and builds the Search; each error names the tool parameter at fault."""
 import re
 from datetime import datetime, timedelta
 
@@ -13,7 +12,7 @@ MAX_PAST_FROM_DAYS = 6
 
 
 def flight_search(origin, destination, date, return_date, max_stops, airlines, window, adults, cabin, currency) -> Search:
-    """The Search for search_flights; raises the errors of airports and of this module in fli's order."""
+    """The Search for search_flights; raises the first problem found, in the order of the parameters."""
     origins, destinations = airports.resolve(origin, "origin"), airports.resolve(destination, "destination")
     codes = airline_codes(airlines)
     hours = departure_window(window)
@@ -21,13 +20,13 @@ def flight_search(origin, destination, date, return_date, max_stops, airlines, w
     if return_date:
         dates.append(_segment_date(return_date, destinations, origins, "return_date"))
         if dates[1] < dates[0]:
-            raise ValidationError(f"input: Value error, Return date ({dates[1]}) cannot be before departure date "
-                                  f"({dates[0]})", "return_date")
+            raise ValidationError(f"The return date {dates[1]} comes before the departure date {dates[0]}",
+                                  "return_date")
     return Search(origins, destinations, dates, STOPS[max_stops], SEATS[cabin], adults, codes, hours, parse_currency(currency))
 
 
 def date_search(origin, destination, start_date, end_date, trip_days, adults, max_stops, currency):
-    """The Search and the days to sweep for cheapest_dates, after fli's swap and clamp of the range."""
+    """The Search and the days to sweep for cheapest_dates: a reversed range is swapped, an old start moves to today."""
     origins, destinations = airports.resolve(origin, "origin"), airports.resolve(destination, "destination")
     first = _segment_date(start_date, origins, destinations, "start_date")
     dates = [first]
@@ -37,7 +36,7 @@ def date_search(origin, destination, start_date, end_date, trip_days, adults, ma
     if start > end:
         start, end = end, start
     if end < models.today() - timedelta(days=1):
-        raise ValidationError("to_date: Value error, To date cannot be in the past", "end_date")
+        raise ValidationError("The whole range is in the past", "end_date")
     if (models.today() - start).days > MAX_PAST_FROM_DAYS:
         start = min(models.today(), end)
     search = Search(origins, destinations, dates, STOPS[max_stops], 1, adults, currency=parse_currency(currency))
@@ -49,10 +48,10 @@ def airline_codes(codes):
         return set()
     tokens = [token.strip().upper() for item in codes for token in re.split(r"[,\s]+", item) if token.strip()]
     if not tokens:
-        raise ParseError(f"No valid airline codes found in: {codes!r}", "airlines")
+        raise ParseError(f"No airline code in {codes!r}", "airlines")
     for code in tokens:
         if not re.fullmatch(r"[A-Z0-9]{2}", code):
-            raise ParseError(f"Invalid airline code: '{code}'", "airlines")
+            raise ParseError(f"'{code}' is not an airline code: two letters or digits, as AR or LA", "airlines")
     return set(tokens)
 
 
@@ -68,10 +67,10 @@ def departure_window(window):
         if not (0 <= earliest <= 23 and 0 <= latest <= 23):
             raise ValueError
     except ValueError:
-        raise ParseError(f"Invalid time range format: '{window}'. Expected 'HH-HH' (e.g., '6-20')",
+        raise ParseError(f"'{window}' is not a departure window: two hours from 0 to 23, as 6-20",
                          "departure_window") from None
     if latest == 0:
-        raise ValidationError("latest_departure: Input should be greater than 0", "departure_window")
+        raise ValidationError("The departure window has to end after hour 0", "departure_window")
     return min(earliest, latest), max(earliest, latest)
 
 
@@ -80,7 +79,7 @@ def parse_currency(currency):
         return None
     code = currency.strip().upper()
     if len(code) != 3 or not code.isalpha():
-        raise ParseError(f"Invalid currency code: '{currency}'. Expected a 3-letter ISO 4217 code.", "currency")
+        raise ParseError(f"'{currency}' is not a currency code: three letters, as USD or ARS", "currency")
     return code
 
 
@@ -89,12 +88,12 @@ def _segment_date(text, origins, destinations, param):
     try:
         normalized = datetime.strptime(text, "%Y-%m-%d").strftime("%Y-%m-%d")
     except ValueError as e:
-        raise ParseError(f"Invalid date: '{text}'. Expected YYYY-MM-DD", param) from e
+        raise ParseError(f"'{text}' is not a date: YYYY-MM-DD", param) from e
     # Validation measures against yesterday in UTC: somewhere on Earth it is still that day
     if _day(normalized) < models.today() - timedelta(days=1):
-        raise ValidationError("travel_date: Value error, Travel date cannot be in the past", param)
+        raise ValidationError(f"{normalized} is in the past", param)
     if origins[0] == destinations[0]:
-        raise ValidationError("input: Value error, Departure and arrival airports must be different", "destination")
+        raise ValidationError("The origin and the destination are the same airport", "destination")
     return normalized
 
 
@@ -108,4 +107,4 @@ def _day(text, field=None, param=None):
     except ValueError as e:
         if field is None:
             raise
-        raise ValidationError(f"{field}: Value error, {e}", param) from e
+        raise ValidationError(f"'{text}' is not a date: YYYY-MM-DD", param) from e

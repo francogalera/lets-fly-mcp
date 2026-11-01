@@ -1,11 +1,7 @@
 #!/usr/bin/env python3
-"""flights selftest: checks the core image end to end with the real isolation.
-
-Searches through the terminal and the MCP, checks that the MCP output is clean, that the proxy blocks
-everything but the allowed hosts, that no containers or networks are left after closing (normally and
-with SIGTERM), and that the core tried to connect nowhere else. Takes about a minute.
-Usage: selftest.py PATH_TO_bin/flights
-"""
+"""flights selftest: the core image end to end with the real isolation. Searches through the
+terminal and the MCP, live replies against their output schema, the proxy, and nothing left behind or let out.
+Usage: selftest.py PATH_TO_bin/flights"""
 import datetime
 import json
 import os
@@ -14,6 +10,9 @@ import subprocess
 import sys
 import time
 import urllib.parse
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "src"))
+from letsfly.mcp import problems  # noqa: E402  stdlib only, so it runs on the host
 
 LAUNCHER = sys.argv[1]
 IMAGE = subprocess.run([LAUNCHER, "image"], capture_output=True, text=True, check=True).stdout.strip()
@@ -36,6 +35,12 @@ def check(name, ok, detail=""):
 def problem(data):
     """The message of a tool's error object, or why there is nothing to show."""
     return data["error"]["message"] if "error" in data else "no results"
+
+
+def fits(name, schema, res):
+    """A live reply against the outputSchema the server published: real data can hold a null the schema forbids."""
+    found = problems(res.get("structuredContent"), schema or {})
+    check(f"MCP: {name} fits its output schema", bool(schema) and not found, "; ".join(m for _, m in found[:3]))
 
 
 def page_ok(link):
@@ -127,9 +132,9 @@ def main():
     mcp = Mcp()
     try:
         mcp.start()
-        tools = {t["name"] for t in mcp.call("tools/list")["result"]["tools"]}
+        schemas = {t["name"]: t.get("outputSchema") for t in mcp.call("tools/list")["result"]["tools"]}
         need = {"search_flights", "cheapest_dates", "find_airports", "promociones-aereas"}
-        check("MCP: clean output and the 4 tools", tools == need, ", ".join(sorted(tools)))
+        check("MCP: clean output and the 4 tools", set(schemas) == need, ", ".join(sorted(schemas)))
         res = mcp.call("tools/call", {"name": "search_flights", "arguments": {
             "origin": ROUTE[0], "destination": ROUTE[1], "date": DATE, "return_date": RETURN}})["result"]
         text = res["content"][0]["text"]
@@ -143,21 +148,25 @@ def main():
         check("MCP: booking links are short and their page redirects to Google", bool(rows) and page_ok(rows[0].get("link")),
               (rows[0].get("link") or "no link") if rows else "no results")
         check("MCP: short reply (under 4000 characters)", len(text) < 4000, f"{len(text)} characters")
+        fits("search_flights", schemas.get("search_flights"), res)
         res = mcp.call("tools/call", {"name": "cheapest_dates", "arguments": {
             "origin": ROUTE[0], "destination": ROUTE[1], "start_date": DATE, "end_date": RANGE_END, "trip_days": 10}})["result"]
         data = res.get("structuredContent") or json.loads(res["content"][0]["text"])
         check("MCP: cheapest_dates", bool(data.get("dates")), f"{len(data.get('dates', []))} dates" if data.get("dates")
               else problem(data))
+        fits("cheapest_dates", schemas.get("cheapest_dates"), res)
         res = mcp.call("tools/call", {"name": "promociones-aereas", "arguments": {"limit": 5, "details": False}})["result"]
         text = res["content"][0]["text"]
         deals = json.loads(text).get("deals", [])
         check("MCP: promociones-aereas, short list", bool(deals) and all(d.get("url") for d in deals) and len(text) < 4000,
               f"{len(deals)} deals, {len(text)} characters" if deals else text[:200])
+        fits("promociones-aereas", schemas.get("promociones-aereas"), res)
         res = mcp.call("tools/call", {"name": "promociones-aereas", "arguments": {"type": "package", "limit": 1}})["result"]
         deal = (json.loads(res["content"][0]["text"]).get("deals") or [{}])[0]
         det = deal.get("details", {})
         check("MCP: promociones-aereas with details by default (keeps 20 s between requests)", bool(det.get("prices_seen_at") and det.get("dates")),
               f"{len(det.get('dates', []))} dates, prices from {det.get('prices_seen_at')}" if det.get("dates") else str(det)[:200])
+        fits("promociones-aereas with details", schemas.get("promociones-aereas"), res)
         verdict = probe_network(mcp.p.pid)
         check("network: google passes, example.com 403, no direct connection",
               verdict == "200 403 no network", verdict or "could not find the session network")

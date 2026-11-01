@@ -70,6 +70,6 @@ def booking_link(itineraries, seat, adults, currency):
         segments = b"".join(_segment([i.legs[0].origin], [i.legs[-1].destination], i.legs[0].departs.strftime("%Y-%m-%d"),
                                      i.legs) for i in itineraries)
         url = f"{BOOKING}?tfs={_envelope(segments, len(itineraries) == 1, adults, seat, pin=True)}"
-    except Exception:  # noqa: BLE001 - fli fell back to the plain search page on any failure
+    except Exception:  # noqa: BLE001 - a link that cannot be built falls back to the search page
         url = PAGE
     return f"{url}{'&' if '?' in url else '?'}curr={quote(currency.upper(), safe='')}" if currency else url
