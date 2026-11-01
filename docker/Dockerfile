@@ -1,8 +1,6 @@
-# Two images, each with its own --target, built from the repo root:
-#   proxy  the only one with a way out to the internet; just Python and proxy.py, nothing third-party
-#   core   letsfly and curl-cffi with its dependencies, with no way out of its own
-# Base images are pinned by digest. Dependencies come from requirements.txt with the hash of every file,
-# wheels only.
+# Two images, each with its own --target, built from the repo root: proxy, the only one with a way out, with
+# nothing third-party; core, letsfly and curl-cffi, with no way out of its own. Bases are pinned by digest and
+# dependencies by the hash of every file, wheels only.
 
 FROM python:3.12-slim@sha256:a0f57064cbdcd6285fa45f51237ab0b35ea8ebaed06a1f5973e89e19dfb86704 AS proxy
 COPY docker/proxy.py /proxy.py

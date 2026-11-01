@@ -13,33 +13,32 @@ ICAO = {row["icao"]: code for code, row in AIRPORTS.items() if row["icao"]}
 # Codes an airport used to have, e.g. PBI and KPBI for DJT since 2026
 ALIASES = {alias: code for code, row in AIRPORTS.items() for alias in row["aliases"].split()}
 
-# Cities served by several airports, and short aliases (sf, la, nyc); from fli's city table
-CITIES = {
-    "new york": ["JFK", "LGA", "EWR"], "nyc": ["JFK", "LGA", "EWR"], "chicago": ["ORD", "MDW"],
-    "washington": ["IAD", "DCA", "BWI"], "washington dc": ["IAD", "DCA", "BWI"],
-    "london": ["LHR", "LGW", "STN", "LTN", "LCY"], "paris": ["CDG", "ORY"], "tokyo": ["NRT", "HND"],
-    "osaka": ["KIX", "ITM"], "seoul": ["ICN", "GMP"], "beijing": ["PEK", "PKX"], "shanghai": ["PVG", "SHA"],
-    "bangkok": ["BKK", "DMK"], "istanbul": ["IST", "SAW"], "moscow": ["SVO", "DME", "VKO"], "milan": ["MXP", "LIN"],
-    "rome": ["FCO", "CIA"], "sao paulo": ["GRU", "CGH"], "rio de janeiro": ["GIG", "SDU"], "rio": ["GIG", "SDU"],
-    "toronto": ["YYZ", "YTZ"], "buenos aires": ["EZE", "AEP"], "dubai": ["DXB", "DWC"], "taipei": ["TPE", "TSA"],
-    "san francisco": ["SFO", "OAK", "SJC"], "sf": ["SFO", "OAK", "SJC"], "bay area": ["SFO", "OAK", "SJC"],
-    "los angeles": ["LAX", "BUR", "SNA", "ONT", "LGB"], "la": ["LAX", "BUR", "SNA", "ONT", "LGB"],
-    "dallas": ["DFW", "DAL"], "houston": ["IAH", "HOU"], "miami": ["MIA", "FLL"], "mexico city": ["MEX", "NLU"],
+# The airports with scheduled service of each IATA metropolitan area, main ones first, by its IATA city code.
+# The last ones share their code with an airport, which the search takes, so they only group the city's airports.
+METROS = {
+    "BAK": ("baku", ["GYD"]), "BHZ": ("belo horizonte", ["CNF"]), "BJS": ("beijing", ["PEK", "PKX"]),
+    "BUE": ("buenos aires", ["EZE", "AEP"]), "BUH": ("bucharest", ["OTP", "BBU"]), "CAS": ("casablanca", ["CMN"]),
+    "CHI": ("chicago", ["ORD", "MDW"]), "DTT": ("detroit", ["DTW"]), "EAP": ("basel", ["BSL"]),
+    "JKT": ("jakarta", ["CGK", "HLP"]), "LON": ("london", ["LHR", "LGW", "STN", "LTN", "LCY", "SEN"]),
+    "MIL": ("milan", ["MXP", "LIN", "BGY"]), "MOW": ("moscow", ["SVO", "DME", "VKO", "ZIA"]),
+    "NYC": ("new york", ["JFK", "LGA", "EWR"]), "OSA": ("osaka", ["KIX", "ITM"]), "PAR": ("paris", ["CDG", "ORY"]),
+    "REK": ("reykjavik", ["KEF", "RKV"]), "RIO": ("rio de janeiro", ["GIG", "SDU"]), "ROM": ("rome", ["FCO", "CIA"]),
+    "SAO": ("sao paulo", ["GRU", "CGH", "VCP"]), "SEL": ("seoul", ["ICN", "GMP"]), "SPK": ("sapporo", ["CTS", "OKD"]),
+    "STO": ("stockholm", ["ARN", "BMA", "NYO", "VST"]), "TYO": ("tokyo", ["NRT", "HND"]),
+    "WAS": ("washington", ["IAD", "DCA", "BWI"]), "YEA": ("edmonton", ["YEG"]), "YMQ": ("montreal", ["YUL"]),
+    "YTO": ("toronto", ["YYZ", "YTZ"]), "QDF": ("dallas", ["DFW", "DAL"]), "QHO": ("houston", ["IAH", "HOU"]),
+    "QLA": ("los angeles", ["LAX", "BUR", "SNA", "ONT", "LGB"]), "QMI": ("miami", ["MIA", "FLL"]),
+    "BKK": ("bangkok", ["BKK", "DMK"]), "DXB": ("dubai", ["DXB", "DWC"]), "IST": ("istanbul", ["IST", "SAW"]),
+    "MEX": ("mexico city", ["MEX", "NLU"]), "SFO": ("san francisco", ["SFO", "OAK", "SJC"]),
+    "SHA": ("shanghai", ["PVG", "SHA"]), "TPE": ("taipei", ["TPE", "TSA"]),
 }
+CITIES = {city: codes for city, codes in METROS.values()}
+# IATA city codes, which the search does not take; bin/airports.py keeps the same codes out of the aliases
+CITY_CODES = {code: city for code, (city, _) in METROS.items() if code not in AIRPORTS}
 # Spanish names of the cities searched most, to the name CITIES uses
 SPANISH = {"londres": "london", "nueva york": "new york", "san pablo": "sao paulo", "tokio": "tokyo", "roma": "rome",
            "pekin": "beijing", "moscu": "moscow", "ciudad de mexico": "mexico city", "estambul": "istanbul",
            "seul": "seoul"}
-# IATA city codes, which Google does not take: each names its city, and CITIES gives its airports when it has them.
-# bin/airports.py keeps the same codes out of the aliases (BER and QSF there are also airports, so not here)
-CITY_CODES = {
-    "BAK": "baku", "BHZ": "belo horizonte", "BJS": "beijing", "BUE": "buenos aires", "BUH": "bucharest",
-    "CAS": "casablanca", "CHI": "chicago", "DTT": "detroit", "EAP": "basel", "JKT": "jakarta", "LON": "london",
-    "MIL": "milan", "MOW": "moscow", "NYC": "new york", "OSA": "osaka", "PAR": "paris", "REK": "reykjavik",
-    "RIO": "rio de janeiro", "ROM": "rome", "SAO": "sao paulo", "SEL": "seoul", "SPK": "sapporo", "STO": "stockholm",
-    "TYO": "tokyo", "WAS": "washington", "YEA": "edmonton", "YMQ": "montreal", "YTO": "toronto", "QDF": "dallas",
-    "QHO": "houston", "QLA": "los angeles", "QMI": "miami",
-}
 LOOK_UP = "find_airports finds the code by city or airport name"
 
 
@@ -47,7 +46,7 @@ def resolve(codes: str, param: str | None = None) -> list[str]:
     """IATA codes for "EZE,AEP" or "SAEZ"; blank entries are ignored. param names the argument in the error."""
     found = [_resolve_one(code.strip(), param) for code in codes.split(",") if code.strip()]
     if not found:
-        raise ParseError(f"No valid airport codes found in: '{codes}'", param)
+        raise ParseError(f"No airport code in '{codes}'", param)
     return found
 
 
@@ -57,14 +56,14 @@ def _resolve_one(code, param):
         return ALIASES[upper]
     if len(upper) == 4 and upper.isalpha():
         if upper not in ICAO:
-            raise UnknownAirport(f"Unknown ICAO code: '{code}'", param, LOOK_UP)
+            raise UnknownAirport(f"No airport has the ICAO code '{code}'", param, LOOK_UP)
         return ICAO[upper]
     if upper in CITY_CODES and upper not in AIRPORTS:
         city = CITY_CODES[upper]
-        hint = ",".join(CITIES[city]) if city in CITIES else f"find_airports('{city}') lists its airports"
-        raise CityCode(f"'{code}' is the city code of {city.title()}, not an airport: search its airports", param, hint)
+        raise CityCode(f"'{code}' is the city code of {city.title()}, not an airport: search its airports", param,
+                       ",".join(CITIES[city]))
     if upper not in AIRPORTS:
-        raise UnknownAirport(f"Invalid airport code: '{code}'", param, LOOK_UP)
+        raise UnknownAirport(f"No airport has the code '{code}'", param, LOOK_UP)
     return upper
 
 

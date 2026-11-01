@@ -17,27 +17,27 @@ _next_start = [0.0]
 _spacing = threading.Lock()
 
 
-class SearchClientError(FlightsError):
+class SearchError(FlightsError):
     kind = "google"
 
 
-class SearchTimeoutError(SearchClientError):
+class SearchTimeout(SearchError):
     kind = "google_timeout"
 
 
-class SearchConnectionError(SearchClientError):
+class SearchUnreachable(SearchError):
     kind = "google_connection"
 
 
-class SearchCertificateError(SearchConnectionError):
+class SearchCertificate(SearchUnreachable):
     kind = "google_certificate"
 
 
-class SearchHTTPError(SearchClientError):
+class SearchRefused(SearchError):
     kind = "google_http"
 
 
-class SearchParseError(SearchClientError):
+class SearchUnreadable(SearchError):
     """A page arrived but could not be read."""
     kind = "google_page"
 
@@ -48,9 +48,9 @@ def fetch(url: str) -> str:
         try:
             response = _get(url)
             break
-        except SearchCertificateError:
+        except SearchCertificate:
             raise
-        except SearchClientError:
+        except SearchError:
             if attempt + 1 == ATTEMPTS:
                 raise
             sleep(2 ** attempt)
@@ -92,17 +92,13 @@ def _wrap(url, e):
 
     host = urlparse(url).hostname or url
     if isinstance(e, curl.CertificateVerifyError) or (isinstance(e, curl.ConnectionError) and getattr(e, "code", None) == 60):
-        return SearchCertificateError(f"TLS certificate verification failed for Google Flights ({host}).")
+        return SearchCertificate(f"The TLS certificate of {host} did not verify")
     if isinstance(e, curl.Timeout):
-        return SearchTimeoutError(
-            f"Timed out talking to Google Flights ({host}). The service may be slow or unreachable from your "
-            "network: check your connection and try again.")
+        return SearchTimeout(f"{host} did not answer within {TIMEOUT} s; try again in a moment")
     if isinstance(e, curl.ConnectionError):
-        return SearchConnectionError(
-            f"Could not reach Google Flights ({host}). Check your internet connection or DNS and try again.")
+        return SearchUnreachable(f"No connection to {host}: the network, DNS or the proxy is down")
     if isinstance(e, curl.HTTPError):
         status = getattr(getattr(e, "response", None), "status_code", None)
         suffix = f" (HTTP {status})" if status else ""
-        return SearchHTTPError(
-            f"Google Flights returned an error response{suffix}. The request may be malformed, rate-limited, or blocked.")
-    return SearchClientError(f"GET request to Google Flights ({host}) failed: {e.__class__.__name__}")
+        return SearchRefused(f"{host} answered with an error{suffix}: it may be limiting or blocking our requests")
+    return SearchError(f"The request to {host} failed: {e.__class__.__name__}")

@@ -1,12 +1,24 @@
-"""The errors the tools return: a class per kind, each with the parameter at fault and a hint when there is one.
-
-mcp.tool turns whatever a tool raises into {"error": payload(e)}, so the agent gets the same object from all 4
-tools: type, message, param, hint and cause, the exception it was raised from. The kinds of the search itself
-live next to their code (models.ParseError and ValidationError, client.SearchClientError and its family) and
-derive from FlightsError; the rest are here.
-"""
+"""The error object every tool returns instead of raising. The search's own kinds live next to their code
+(models, client); Kind lists them all because a client may check results against it."""
 import sys
 import traceback
+from typing import Annotated, Literal, NotRequired, TypedDict
+
+Kind = Literal["internal", "invalid_arguments", "unknown_tool", "unknown_airport", "city_code", "invalid_input",
+               "invalid_request", "google", "google_timeout", "google_connection", "google_certificate", "google_http",
+               "google_page", "blog_unavailable", "blog_forbidden", "blog_unreadable"]
+
+
+class Error(TypedDict):
+    type: Annotated[Kind, "What failed; internal is a bug in the tool"]
+    message: Annotated[str, "What happened"]
+    param: NotRequired[Annotated[str, "The tool parameter at fault"]]
+    hint: NotRequired[Annotated[str, "How to retry; for city_code, the airport codes to search instead"]]
+    cause: NotRequired[Annotated[str, "The exception underneath, class and message"]]
+
+
+class Failure(TypedDict):
+    error: Annotated[Error, "What the tool returns instead of its result when it fails"]
 
 
 class FlightsError(Exception):
@@ -46,7 +58,7 @@ class InvalidArguments(FlightsError):
     kind = "invalid_arguments"
 
 
-def payload(e: Exception) -> dict:
+def payload(e: Exception) -> Error:
     """The error object: an exception that is not a FlightsError is a bug, and keeps its class name as internal."""
     ours = isinstance(e, FlightsError)
     out = {"type": e.kind if ours else "internal", "message": (str(e) if ours else f"{type(e).__name__}: {e}")[:400]}
@@ -59,7 +71,7 @@ def payload(e: Exception) -> dict:
     return out
 
 
-def result(e: Exception) -> dict:
+def result(e: Exception) -> Failure:
     """What a tool returns instead of raising. An internal error also prints its traceback on stderr, which the
     MCP protocol leaves free, so the bug can be traced."""
     out = {"error": payload(e)}

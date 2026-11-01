@@ -1,18 +1,130 @@
-"""The flights MCP: small tools over Google Flights and promociones-aereas.com.ar, with short answers for the agent.
-
-Flight tools run on letsfly's own core (params, search, airports) and only shape its output: one row per
-option. Errors are not handled here: @tool turns what a tool raises into {"error": ...} (letsfly.errors).
-Runs over stdio: nothing may print, stdout belongs to the protocol.
-"""
-from typing import Annotated, Literal
+"""The flights MCP: four tools over Google Flights and promociones-aereas.com.ar, and the shape of each answer.
+Runs over stdio, so nothing here may print: stdout belongs to the protocol."""
+from typing import Annotated, Literal, NotRequired, TypedDict
 
 from letsfly import airports, links, params, promos, search
+from letsfly.errors import Failure
 from letsfly.mcp import Range, serve, tool
 from letsfly.tfs import booking_link
 
 Airports = Annotated[str, "IATA code, or several separated by commas (EZE,AEP)"]
 Day = Annotated[str, "Date YYYY-MM-DD"]
 Stops = Literal["ANY", "NON_STOP", "ONE_STOP", "TWO_PLUS_STOPS"]
+Currency = Annotated[str, "Currency of every price"]
+Link = Annotated[str, "Short local link (file://.../flight-links/<id>.html) that opens the real page"]
+
+
+class Layover(TypedDict):
+    airport: Annotated[str, "Where the connection is, IATA code"]
+    minutes: Annotated[int, "From landing to the next departure"]
+    overnight: NotRequired[Annotated[bool, "Present when the layover touches 00:00 to 05:00"]]
+    change_of_airport: NotRequired[Annotated[bool, "Present when the next leg leaves from another airport"]]
+
+
+class Direction(TypedDict):
+    route: Annotated[str, "Airports in order, EZE-GRU-NRT; AEP/EZE lands at one and leaves from the other"]
+    flights: Annotated[str, "Flight numbers in order, separated by spaces"]
+    depart: Annotated[str, "Local departure time, YYYY-MM-DD HH:MM"]
+    arrive: Annotated[str, "Local arrival time, YYYY-MM-DD HH:MM"]
+    hours: Annotated[float, "Total duration"]
+    layovers: Annotated[list[Layover], "One per connection, in order"]
+    operated_by: Annotated[dict[str, str] | None, "Flight to the company that flies it, when not the seller"]
+
+
+class Bags(TypedDict):
+    carry_on: Annotated[int | None, "Carry-on bags included; null when Google does not say"]
+    checked: Annotated[int | None, "Checked bags included; null when Google does not say"]
+
+
+class Flight(TypedDict):
+    price: Annotated[float | None, "Fare for all adults; on a round trip, for this outbound and return pair"]
+    airlines: Annotated[str, "Airlines selling the legs"]
+    bags: Annotated[Bags, "Bags the fare includes"]
+    out: Annotated[Direction, "Outbound"]
+    back: NotRequired[Annotated[Direction, "Return, on a round trip"]]
+    price_estimated: NotRequired[Annotated[bool, "The pair had no quote, so price is the outbound's"]]
+    self_transfer: NotRequired[Annotated[bool, "Separate tickets: a missed connection is the traveller's problem"]]
+    link: NotRequired[Annotated[str, "Short local link to this row's booking page on Google Flights"]]
+
+
+class FlightsResult(TypedDict):
+    currency: Currency
+    count: Annotated[int, "Rows in flights"]
+    flights: Annotated[list[Flight], "The cheapest of each distinct outbound first, then the rest, cheapest first"]
+    note: NotRequired[Annotated[str, "Why some round trips are missing"]]
+
+
+DateRow = TypedDict("DateRow", {
+    "date": Annotated[str, "Departure date, YYYY-MM-DD"],
+    "return": NotRequired[Annotated[str, "Return date, with trip_days"]],
+    "price": Annotated[float, "Lowest fare for all adults that day; with trip_days, for the round trip"],
+})
+
+
+class DatesResult(TypedDict):
+    currency: Currency
+    count: Annotated[int, "Rows in dates"]
+    dates: Annotated[list[DateRow], "Cheapest first"]
+    missing_dates: NotRequired[Annotated[list[str], "Dates whose page failed: unknown, not without flights"]]
+    note: NotRequired[Annotated[str, "Every page loaded and none had fares"]]
+
+
+class Airport(TypedDict):
+    code: Annotated[str, "IATA code, what the flight tools take"]
+    name: Annotated[str, "Airport name"]
+    city: Annotated[str, "City it serves"]
+    country: Annotated[str, "Country"]
+
+
+class AirportsResult(TypedDict):
+    airports: Annotated[list[Airport], "Best match first"]
+
+
+class Featured(TypedDict):
+    hotel: Annotated[str, "Hotel name"]
+    out: Annotated[str | None, "Departure date, YYYY-MM-DD"]
+    back: Annotated[str | None, "Return date, YYYY-MM-DD"]
+    meal_plan: Annotated[str, "Meal plan, as the package link names it"]
+    link: Link
+
+
+class DealDate(TypedDict):
+    out: Annotated[str, "Departure date, YYYY-MM-DD"]
+    back: Annotated[str, "Return date, YYYY-MM-DD"]
+    to: NotRequired[Annotated[str, "Destination airport, when the link names one"]]
+    days: Annotated[int | None, "Length of stay in days"]
+    direct: Annotated[bool, "The blog lists it as a direct flight"]
+    link: Link
+
+
+class Details(TypedDict):
+    prices_seen_at: NotRequired[Annotated[str, "When the blog saw the prices, Argentina time"]]
+    expired: Annotated[bool, "The blog marks the post as expired"]
+    notes: Annotated[list[str], "The post's opening paragraphs"]
+    badges: NotRequired[Annotated[list[str], "Labels the blog puts on the post"]]
+    featured: NotRequired[Annotated[list[Featured], "Hotels a package features"]]
+    other_occupancy: NotRequired[Annotated[dict[str, str], "Room occupancy (doble, triple) to the link of its dates"]]
+    fields: NotRequired[Annotated[dict[str, str], "The post's labelled facts: airline, baggage, payment terms"]]
+    dates_total: NotRequired[Annotated[int, "How many dates the post had, when more than the 60 listed"]]
+    dates: Annotated[list[DealDate], "Dates on sale, each with its own link and no price"]
+
+
+class Deal(TypedDict):
+    published: Annotated[str | None, "When the post went up, YYYY-MM-DD HH:MM Argentina time"]
+    type: Annotated[Literal["package", "flight", "hotel", "car", "activity", "note"], "What the deal sells"]
+    title: Annotated[str, "The post's title"]
+    price_from: Annotated[float | None, "The title's \"a partir de\": lowest price when the post was written"]
+    currency: Annotated[Literal["USD", "ARS"] | None, "Currency of price_from"]
+    basis: NotRequired[Annotated[str, "What price_from covers: per person, per night"]]
+    origin: NotRequired[Annotated[str, "Departure city the title names"]]
+    url: Annotated[str, "The post"]
+    details: NotRequired[Annotated[Details | Failure, "The post read in full, or the error that kept it from it"]]
+
+
+class DealsResult(TypedDict):
+    source: Annotated[str, "The blog"]
+    count: Annotated[int, "Deals returned"]
+    deals: Annotated[list[Deal], "Newest first"]
 
 
 def _flight(leg):
@@ -57,16 +169,16 @@ def search_flights(
     currency: str = "USD",
     limit: Annotated[int, Range(1, 20)] = 5,
     all_links: Annotated[bool, "Booking link on every row; by default only the first 2 rows carry one"] = False,
-) -> dict:
-    """Flights on one date: first the cheapest option of each distinct outbound, then the rest, cheapest first. The price is the fare for all adults and, on a round trip, the
-    total Google quotes for that outbound and return pair. bags is what the fare includes: carry_on and
-    checked counts, null where Google does not say. self_transfer means the itinerary glues separate
-    tickets (a missed connection is the traveller's problem). Each direction carries layovers (airport,
-    minutes, overnight: true when the layover touches the night, crossing midnight or starting before 05:00,
-    change_of_airport: true when the next leg leaves from another airport, also shown in route as AEP/EZE)
-    and operated_by: flight -> the carrier that flies it when it is another company than the airline
-    selling it, or null when there is none. link is a short local link (file://.../flight-links/<id>.html)
-    that opens Google Flights' booking page for that row."""
+) -> FlightsResult:
+    """Flights on one date, or round trips with return_date: the cheapest of each distinct outbound first, then the
+    rest, cheapest first. price is the fare for all adults; on a round trip, for that outbound and return pair
+    (price_estimated: the pair had no quote, the outbound's price stands in). bags: what the fare includes; null is
+    Google not saying, not zero. self_transfer: separate tickets, a missed connection is the traveller's problem.
+    out and back: route (AEP/EZE lands at one airport, leaves from the other), flights, local times, hours,
+    layovers (overnight: touches 00:00 to 05:00; change_of_airport: the next leg leaves from another airport) and
+    operated_by (flight to the company flying it when not the seller, else null). link, on the first 2 rows or all
+    with all_links: a short local link to the row's booking page, to pass on unchanged. note: some round trips are
+    missing because their return page failed."""
     query = params.flight_search(origin, destination, date, return_date, max_stops, airlines, departure_window,
                                  adults, cabin, currency)
     found, lost = search.flights(query)
@@ -124,9 +236,10 @@ def cheapest_dates(
     max_stops: Stops = "ANY",
     currency: str = "USD",
     limit: Annotated[int, Range(1, 60)] = 10,
-) -> dict:
-    """Lowest price per departure date in a range, cheapest first. missing_dates lists the dates whose page
-    failed to load, so they are unknown rather than without flights."""
+) -> DatesResult:
+    """Lowest price per departure date, cheapest first; one Google page per date, 93 dates at most. price: lowest
+    fare for all adults, for the round trip with trip_days. missing_dates: their page failed, so they are unknown,
+    not empty. note: every page loaded and none had fares."""
     query, days = params.date_search(origin, destination, start_date, end_date, trip_days, adults, max_stops,
                                      currency)
     found, missing = search.dates(query, days, trip_days)
@@ -144,10 +257,10 @@ def cheapest_dates(
 def find_airports(
     query: Annotated[str, "IATA or ICAO code, city (also in Spanish: Londres), airport name or country"],
     limit: Annotated[int, Range(1, 20)] = 5,
-) -> dict:
-    """Finds airports by code, city, name or country: code, name, city and country of each, best match first.
-    A city with several airports, by name or by its IATA city code (BUE, LON), gives all of them first; the
-    flight tools take those airport codes, not the city code."""
+) -> AirportsResult:
+    """Airports by IATA or ICAO code, city (Spanish names too: Londres), airport name or country, best match first.
+    A city with several airports, by name or by IATA city code (BUE, LON), lists all of them first. The flight tools
+    take those airport codes, never a city code."""
     return {"airports": airports.search(query, limit)}
 
 
@@ -161,11 +274,13 @@ def promociones_aereas(
                              "featured hotels and when the blog saw the price. false only for a quick scan of many titles"] = True,
     month: Annotated[str | None, "Only departure dates in that month, YYYY-MM"] = None,
     stay_days: Annotated[int | None, Range(1, 60), "Only dates with that length of stay in days, ±1 (each date carries days to tell the exact ones)"] = None,
-) -> dict:
-    """Deals published on promociones-aereas.com.ar (flights, packages, hotels), newest first, each with
-    its details nested. price_from is the title's "a partir de": the lowest price the blog saw when it
-    wrote the post, not a price per date. Detail dates carry no price; each one carries its link, and to
-    (the destination airport) when the link names one. For the real price of a flight on those dates, use
+) -> DealsResult:
+    """Deals on promociones-aereas.com.ar (flights, packages, hotels), newest first, with details. price_from is the
+    title's "a partir de": the lowest price when the post was written (prices_seen_at), not per date; currency can
+    be ARS. details: the dates on sale, each with its own link and to (destination airport) when known, the post's
+    fields (airline, baggage, payment), featured hotels and notes, or an error object if the post was unreadable.
+    A package lists the dates of the room occupancy its price is based on, other_occupancy links the rest, and a
+    post with more than 60 dates gives dates_total. Dates carry no price: check a flight deal's dates with
     search_flights."""
     return promos.search(query, type, page, limit, details, month, stay_days)
 

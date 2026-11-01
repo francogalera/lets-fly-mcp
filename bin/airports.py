@@ -1,9 +1,6 @@
 """Rebuilds src/letsfly/data/airports.csv from OurAirports (public domain) and prints which codes came and went.
-
-Keeps airports with an IATA code, the way Google Flights names them: when OurAirports moves a code (PBI became
-DJT in 2026), Google follows. Codes an airport used to have (PBI, KPBI) become its aliases when they point to that
-airport alone. Usage: airports.py REPO_ROOT
-"""
+Former codes become aliases when they name one airport alone: the search follows OurAirports when it moves a code
+(PBI became DJT in 2026). Usage: airports.py REPO_ROOT"""
 import collections
 import csv
 import io
