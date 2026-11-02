@@ -1,7 +1,7 @@
 # Lets fly
 
-Flight search for the `flights` Claude Code subagent: Google Flights and promociones-aereas.com.ar deals,
-behind an MCP server, isolated in Docker.
+Flight search for the `flights` Claude Code subagent, Claude Desktop, Codex and ChatGPT Desktop: Google Flights and
+promociones-aereas.com.ar deals, behind an MCP server, isolated in Docker. Runs on Linux and macOS.
 
 ## Conventions
 
@@ -15,14 +15,14 @@ behind an MCP server, isolated in Docker.
 
 ## Use
 
-    ./install.sh                         build the images, link flights, install the subagent and its skill
+    ./install.sh                         build the images, link flights, set up the clients (see Clients)
     flights --help                       every command
     flights search EZE MIA 2026-12-10    also: dates, airports; --json prints what the agent gets
     flights mcp                          the MCP server over stdio
-    flights test                         offline tests inside the image
+    flights test                         offline tests inside the image, and the launcher on bash 3.2
     flights selftest                     live check: searches, MCP and its schemas, network blocking, cleanup
     flights audit                        live data checks against Google: pair prices, dates, a burst
-    flights update                       pull this repo and reinstall: images, agent and skill
+    flights update                       pull this repo and reinstall: images, agent, skill and clients
     flights build                        rebuild both images after changing src/ or docker/
     flights image                        tag of the core image, which follows the content of src/ and docker/
 
@@ -30,7 +30,16 @@ behind an MCP server, isolated in Docker.
 
 Each session gets its own internal network, a read-only, unprivileged core container with nothing
 mounted, and a proxy that only lets HTTPS through to www.google.com and promociones-aereas.com.ar.
-Every egress attempt is logged to `~/.local/state/flights/egress.log`.
+Every egress attempt is logged to `~/.local/state/flights/egress.log`. The proxy exits once the core is gone, so a
+client that kills `flights mcp` (Claude Code allows half a second) leaves no containers or networks behind.
+
+## Clients
+
+`install.sh` copies the subagent and the `broad-search` skill to `~/.claude` for Claude Code, adds `flights` to
+Claude Desktop and to Codex (`codex mcp add`, plus both skills in `~/.agents/skills`) when they are installed, and
+puts a plugin with the server and both skills in the personal marketplace (`~/.agents/plugins/marketplace.json`),
+from which ChatGPT Desktop installs it.
+Every client gets the server's `instructions`: the rules that matter most fit in their first 512 characters.
 
 ## Links
 

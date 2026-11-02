@@ -18,6 +18,7 @@ PROTOCOL = "2025-06-18"
 READ_ONLY = {"readOnlyHint": True, "idempotentHint": True}
 TYPES = {str: "string", int: "integer", bool: "boolean", float: "number", type(None): "null", dict: "object"}
 _tools = {}
+_instructions = None
 _out = threading.Lock()
 
 
@@ -149,7 +150,7 @@ def _handle(msg):
     method, params = msg.get("method"), msg.get("params") or {}
     if method == "initialize":
         return {"protocolVersion": PROTOCOL, "capabilities": {"tools": {}},
-                "serverInfo": {"name": "flights", "version": "1"}}
+                "serverInfo": {"name": "flights", "version": "1"}, **({"instructions": _instructions} if _instructions else {})}
     if method == "ping":
         return {}
     if method == "tools/list":
@@ -178,7 +179,9 @@ def _write(reply):
         sys.stdout.flush()
 
 
-def serve():
+def serve(instructions=None):
+    global _instructions
+    _instructions = instructions
     with ThreadPoolExecutor(max_workers=8) as pool:
         for line in sys.stdin:
             if not line.strip():

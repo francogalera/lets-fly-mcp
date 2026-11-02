@@ -7,6 +7,18 @@ from letsfly.errors import Failure
 from letsfly.mcp import Range, serve, tool
 from letsfly.tfs import booking_link
 
+# ChatGPT reads only the first 512 characters and Codex caps plugin servers at 1,000 bytes, so the core goes first
+INSTRUCTIONS = (
+    "Never state a price, time, airline or link that is not in a tool result of this session. Copy each link "
+    "exactly as returned: never build, edit, shorten or join links. Fixed dates: search_flights on them. Flexible "
+    "dates: cheapest_dates first, then search_flights on the best dates. An empty result means this search found "
+    "nothing, not that no flight exists: try nearby dates or airports and say so. A tool error carries a hint: "
+    "follow it and retry.\n"
+    "Use only airport codes find_airports returned or a flight tool accepted. promociones-aereas reads a deals blog "
+    "at about 5 s per request: list with details=false first, then read at most 3 deals. Answer in the language of "
+    "the request, best option first, with its price, bags, route, times and link."
+)
+
 Airports = Annotated[str, "IATA code, or several separated by commas (EZE,AEP)"]
 Day = Annotated[str, "Date YYYY-MM-DD"]
 Stops = Literal["ANY", "NON_STOP", "ONE_STOP", "TWO_PLUS_STOPS"]
@@ -286,4 +298,4 @@ def promociones_aereas(
 
 
 if __name__ == "__main__":
-    serve()
+    serve(INSTRUCTIONS)
