@@ -269,7 +269,7 @@ def promociones_aereas(
     query: Annotated[str, "What to look for: destination, airline or origin (punta cana, paquetes brasil). Empty: the latest posts"] = "",
     type: Literal["any", "package", "flight", "hotel", "car", "activity"] = "any",
     page: Annotated[int, Range(1, 10), "Feed page, 15 posts per page, newest first"] = 1,
-    limit: Annotated[int, Range(1, 15), "How many deals to return, each with its details (about 20 s per deal)"] = 5,
+    limit: Annotated[int, Range(1, 15), "How many deals to return, each with its details (about 5 s per deal)"] = 5,
     details: Annotated[bool, "By default every deal nests its details: dates with links, payment terms, airline, baggage, "
                              "featured hotels and when the blog saw the price. false only for a quick scan of many titles"] = True,
     month: Annotated[str | None, "Only departure dates in that month, YYYY-MM"] = None,
