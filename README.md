@@ -16,11 +16,13 @@ behind an MCP server, isolated in Docker.
 ## Use
 
     ./install.sh                         build the images, link flights, install the subagent and its skill
+    flights --help                       every command
     flights search EZE MIA 2026-12-10    also: dates, airports; --json prints what the agent gets
     flights mcp                          the MCP server over stdio
     flights test                         offline tests inside the image
     flights selftest                     live check: searches, MCP and its schemas, network blocking, cleanup
     flights audit                        live data checks against Google: pair prices, dates, a burst
+    flights update                       pull this repo and reinstall: images, agent and skill
     flights build                        rebuild both images after changing src/ or docker/
     flights image                        tag of the core image, which follows the content of src/ and docker/
 
