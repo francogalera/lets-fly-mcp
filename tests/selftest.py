@@ -164,7 +164,7 @@ def main():
         res = mcp.call("tools/call", {"name": "promociones-aereas", "arguments": {"type": "package", "limit": 1}})["result"]
         deal = (json.loads(res["content"][0]["text"]).get("deals") or [{}])[0]
         det = deal.get("details", {})
-        check("MCP: promociones-aereas with details by default (keeps 20 s between requests)", bool(det.get("prices_seen_at") and det.get("dates")),
+        check("MCP: promociones-aereas with details by default (keeps 5 s between requests)", bool(det.get("prices_seen_at") and det.get("dates")),
               f"{len(det.get('dates', []))} dates, prices from {det.get('prices_seen_at')}" if det.get("dates") else str(det)[:200])
         fits("promociones-aereas with details", schemas.get("promociones-aereas"), res)
         verdict = probe_network(mcp.p.pid)

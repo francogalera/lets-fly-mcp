@@ -10,7 +10,7 @@ behind an MCP server, isolated in Docker.
 - **One way to do it**: no abstractions just in case.
 - **Least surprise**: the price is what you pay, empty is not failed, unknown is `null`.
 - **Small, readable code**: plain functions and dataclasses, comments only for a non-obvious why.
-- **Sharp inside, strict at the edge**: sandboxed, allowlisted, polite (10 req/s to Google, 20 s between blog requests).
+- **Sharp inside, strict at the edge**: sandboxed, allowlisted, polite (10 req/s to Google, 5 s between blog requests).
 - **Dependencies earn their place**: curl_cffi and what it needs, nothing else.
 
 ## Use
