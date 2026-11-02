@@ -14,6 +14,25 @@ LINKS="$HERE/local/flight-links"
 SESSION="flights-$$-$RANDOM"
 PROXY=http://proxy:3128
 
+usage() {
+  cat <<'USAGE'
+usage: flights COMMAND [ARGS]
+
+  search ORIGIN DESTINATION DATE [RETURN]      flights on one date, cheapest first
+  dates ORIGIN DESTINATION START END [DAYS]    lowest price per departure date
+  airports QUERY                               airports by code, city or name
+  audit                                        live data checks: pair prices, dates, a burst
+  mcp                                          the MCP server over stdio, for the flights agent
+  update                                       pull this repo and reinstall: images, agent, skill
+  build                                        rebuild both images after changing src/ or docker/
+  image                                        tag of the core image
+  test                                         offline tests inside the image
+  selftest                                     live check: searches, MCP, network blocking, cleanup
+
+search, dates and airports take --json (the reply as the agent gets it); COMMAND --help shows the rest.
+USAGE
+}
+
 build() {
   docker build -f "$HERE/docker/Dockerfile" --target proxy -t "$PROXY_IMAGE" "$HERE"
   docker build -f "$HERE/docker/Dockerfile" --target core -t "$IMAGE" "$HERE"
@@ -71,7 +90,9 @@ case "${1:-}" in
   image) echo "$IMAGE"; exit ;;
   selftest) exec python3 -I "$HERE/tests/selftest.py" "$HERE/bin/flights" ;;
   test) shift; exec "$HERE/tests/run.sh" "$IMAGE" "$@" ;;
-  "") set -- --help ;;
+  # exec, because the pull may rewrite this very script while bash is still reading it
+  update) exec sh -c 'git -C "$1" pull --ff-only && "$1/install.sh"' sh "$HERE" ;;
+  "" | -h | --help | help) usage; exit ;;
 esac
 
 sweep
