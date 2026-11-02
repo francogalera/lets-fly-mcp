@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Egress proxy for flights, the only way out of the core's network: lets HTTPS through only to the allowed hosts
 and logs each attempt to stdout as `UTC-datetime ALLOW|BLOCK|ERROR host:port session` for bin/flights to collect.
+Exits when the container <SESSION>-core leaves its network.
 Usage: proxy.py PORT HOST[,HOST...] SESSION"""
+import os
 import select
 import socket
 import sys
@@ -70,6 +72,21 @@ def handle(client):
                 s.close()
 
 
+def follow(core):
+    """Exits once the core has come and gone: on a signal the launcher returns at once and leaves this to us."""
+    seen, misses, start = False, 0, time.monotonic()
+    while True:
+        time.sleep(0.1)
+        try:
+            socket.gethostbyname(core)
+            seen, misses = True, 0
+        except OSError:
+            misses += 1
+        if seen and misses >= 3 or not seen and time.monotonic() - start > 60:
+            os._exit(0)
+
+
+threading.Thread(target=follow, args=(f"{SESSION}-core",), daemon=True).start()
 srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 srv.bind(("0.0.0.0", PORT))

@@ -177,21 +177,35 @@ def main():
     time.sleep(1)
     check("MCP: closing stdin leaves no containers or networks", not leftovers(mcp.p.pid))
 
+    # How Claude Code stops a server on Linux and macOS: SIGINT, SIGTERM 100 ms later, SIGKILL 400 ms after that
     term = Mcp()
     try:
         term.start()
-        term.p.send_signal(signal.SIGTERM)
-        term.p.wait(timeout=20)
-        time.sleep(1)
-        check("MCP: SIGTERM leaves no containers or networks", not leftovers(term.p.pid))
+        term.call("tools/call", {"name": "promociones-aereas", "arguments": {"limit": 1, "details": False}})
+        start = time.monotonic()
+        for sig, grace in ((signal.SIGINT, 0.1), (signal.SIGTERM, 0.4), (signal.SIGKILL, 10)):
+            term.p.send_signal(sig)
+            try:
+                term.p.wait(timeout=grace)
+                break
+            except subprocess.TimeoutExpired:
+                pass
+        took = time.monotonic() - start
+        check("MCP: closed like Claude Code, it ends before SIGKILL", took < 0.5, f"{took:.3f} s")
+        deadline = time.monotonic() + 10
+        while leftovers(term.p.pid) and time.monotonic() < deadline:
+            time.sleep(0.2)
+        check("MCP: closed like Claude Code, it leaves no containers or networks", not leftovers(term.p.pid))
     except Exception as e:  # noqa: BLE001
         term.p.kill()
-        check("MCP: SIGTERM", False, f"{type(e).__name__}: {e}")
+        check("MCP: closed like Claude Code", False, f"{type(e).__name__}: {e}")
 
-    # The log is written as each session closes; only this test's sessions count
+    # The log is written while each session runs; only this test's sessions count
     with open(LOG) as f:
         f.seek(log_start)
         ours = [line.split() for line in f if any(f" flights-{pid}-" in line for pid in pids)]
+    check("network: the log kept the session closed like Claude Code",
+          any(session.startswith(f"flights-{term.p.pid}-") for *_, session in ours))
     # The proxy connects upstream only after logging ALLOW, so an ERROR line is never new egress
     unexpected = sorted({f"{v} {t}" for _, v, t, _ in ours if v != "ERROR"} - EXPECTED_EGRESS)
     check("network: the core tried to go nowhere else", not unexpected, ", ".join(unexpected))

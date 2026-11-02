@@ -6,7 +6,7 @@ import time
 import unittest
 from typing import Annotated
 
-from letsfly import errors, mcp
+from letsfly import errors, mcp, tools
 
 @mcp.tool("test_wait")
 def wait(seconds: Annotated[float, "How long to wait"], tag: Annotated[str, mcp.Range(), "Echoed back"] = "") -> dict:
@@ -24,11 +24,11 @@ def fail() -> dict:
         raise errors.CityCode("'BUE' is a city code", "origin", "EZE,AEP") from e
 
 
-def converse(*messages):
+def converse(*messages, instructions=None):
     stdin, stdout = sys.stdin, sys.stdout
     sys.stdin, sys.stdout = io.StringIO("".join(json.dumps(m) + "\n" for m in messages)), io.StringIO()
     try:
-        mcp.serve()
+        mcp.serve(instructions)
         return [json.loads(line) for line in sys.stdout.getvalue().splitlines()]
     finally:
         sys.stdin, sys.stdout = stdin, stdout
@@ -48,6 +48,7 @@ class Server(unittest.TestCase):
         by_id = {r["id"]: r for r in replies}
         self.assertEqual(len(replies), 4)
         self.assertEqual(by_id[1]["result"]["protocolVersion"], mcp.PROTOCOL)
+        self.assertNotIn("instructions", by_id[1]["result"])
         tool = next(t for t in by_id[2]["result"]["tools"] if t["name"] == "test_wait")
         self.assertEqual(tool["inputSchema"]["required"], ["seconds"])
         self.assertEqual(tool["inputSchema"]["properties"]["seconds"], {"type": "number", "description": "How long to wait"})
@@ -77,6 +78,26 @@ class Server(unittest.TestCase):
         self.assertEqual(fail(), {"error": want})
         self.assertEqual(by_id[2]["structuredContent"]["error"]["type"], "unknown_tool")
         self.assertFalse(converse(call(3, "test_wait", {"seconds": 0}))[0]["result"]["isError"])
+
+
+class Instructions(unittest.TestCase):
+    """ChatGPT reads the first 512 characters; Codex cuts plugin servers' instructions and tool descriptions at 1,000 bytes."""
+
+    def test_initialize_carries_them(self):
+        reply = converse({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}, instructions=tools.INSTRUCTIONS)
+        self.assertEqual(reply[0]["result"]["instructions"], tools.INSTRUCTIONS)
+
+    def test_the_core_fits_in_512_characters_and_the_whole_under_1000_bytes(self):
+        core = tools.INSTRUCTIONS[:512]
+        for rule in ("Never state a price", "exactly as returned", "Fixed dates: search_flights",
+                     "Flexible dates: cheapest_dates first", "An empty result"):
+            self.assertIn(rule, core)
+        self.assertLess(len(tools.INSTRUCTIONS.encode()), 1000)
+
+    def test_every_tool_description_is_under_1000_bytes(self):
+        listed = converse({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})[0]["result"]["tools"]
+        for t in listed:
+            self.assertLess(len(t["description"].encode()), 1000, t["name"])
 
 
 if __name__ == "__main__":

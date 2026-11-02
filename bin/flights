@@ -3,16 +3,27 @@
 # Commands, isolation and links: README.md.
 set -euo pipefail
 
-HERE="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
+# Clients on macOS start servers without the shell's PATH, and Docker Desktop and Homebrew live outside the default
+PATH="$PATH:/usr/local/bin:/opt/homebrew/bin:$HOME/.docker/bin"
+# macOS has bash 3.2, no sha256sum, and readlink -f only since 12.3
+self=$0
+while [ -L "$self" ]; do
+  link=$(readlink "$self")
+  case "$link" in /*) self=$link ;; *) self=$(dirname "$self")/$link ;; esac
+done
+HERE="$(cd "$(dirname "$self")/.." && pwd)"
+if command -v sha256sum >/dev/null; then SHA=(sha256sum); else SHA=(shasum -a 256); fi
 # Tags follow the content: if something changed and was not rebuilt, startup says so
-IMAGE="lets-fly-core:$(cd "$HERE" && find src/letsfly docker -type f ! -path '*/__pycache__/*' -print0 | sort -z |
-  xargs -0 sha256sum | sha256sum | cut -c1-12)"
-PROXY_IMAGE="lets-fly-proxy:$(sha256sum "$HERE/docker/proxy.py" | cut -c1-12)"
+IMAGE="lets-fly-core:$(cd "$HERE" && find src/letsfly docker -type f ! -path '*/__pycache__/*' -print0 | LC_ALL=C sort -z |
+  xargs -0 "${SHA[@]}" | "${SHA[@]}" | cut -c1-12)"
+PROXY_IMAGE="lets-fly-proxy:$("${SHA[@]}" "$HERE/docker/proxy.py" | cut -c1-12)"
 ALLOW=www.google.com,promociones-aereas.com.ar
 LOG="${XDG_STATE_HOME:-$HOME/.local/state}/flights/egress.log"
 LINKS="$HERE/local/flight-links"
 SESSION="flights-$$-$RANDOM"
 PROXY=http://proxy:3128
+# bash as macOS ships it, for the tests
+BASH32=bash@sha256:b6252c62fc86114f93f02104a486c71e6569371d95950ea7479a2ffd6b47f16a
 
 usage() {
   cat <<'USAGE'
@@ -23,10 +34,10 @@ usage: flights COMMAND [ARGS]
   airports QUERY                               airports by code, city or name
   audit                                        live data checks: pair prices, dates, a burst
   mcp                                          the MCP server over stdio, for the flights agent
-  update                                       pull this repo and reinstall: images, agent, skill
+  update                                       pull this repo and reinstall: images, agent, skill, clients
   build                                        rebuild both images after changing src/ or docker/
   image                                        tag of the core image
-  test                                         offline tests inside the image
+  test                                         offline tests inside the image, and this script on bash 3.2
   selftest                                     live check: searches, MCP, network blocking, cleanup
 
 search, dates and airports take --json (the reply as the agent gets it); COMMAND --help shows the rest.
@@ -34,6 +45,7 @@ USAGE
 }
 
 build() {
+  docker pull -q "$BASH32" >/dev/null
   docker build -f "$HERE/docker/Dockerfile" --target proxy -t "$PROXY_IMAGE" "$HERE"
   docker build -f "$HERE/docker/Dockerfile" --target core -t "$IMAGE" "$HERE"
 }
@@ -56,10 +68,40 @@ sweep() {
     while read -r id pid; do kill -0 "$pid" 2>/dev/null || docker network rm "$id" >/dev/null 2>&1 || true; done
 }
 
+# A removed container's endpoint can outlive it by a moment
+remove_network() {
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    docker network rm "$SESSION" >/dev/null 2>&1 && return
+    sleep 0.2
+  done
+}
+
+# Appends the proxy's log as it is written and removes the network once the proxy is gone
+watch_proxy() {
+  mkdir -p "$(dirname "$LOG")"
+  docker logs -f "$SESSION-proxy" 2>/dev/null | grep --line-buffered -v '^LISTEN' >> "$LOG" || true
+  remove_network
+}
+
 cleanup() {
-  save_log "$SESSION-proxy"
   docker rm -f "$SESSION-core" "$SESSION-proxy" >/dev/null 2>&1 || true
-  docker network rm "$SESSION" >/dev/null 2>&1 || true
+  if [ -n "$watcher" ]; then wait "$watcher" 2>/dev/null || true; else remove_network; fi
+}
+
+# Runs "$@" in the background in a process group of its own, so it outlives a kill of this script and of its group
+detach() {
+  set -m
+  "$@" </dev/null >/dev/null 2>&1 &
+  set +m
+}
+
+# Claude Code sends SIGINT, SIGTERM and SIGKILL within half a second, and Codex signals the whole process group: stop
+# the core, hand the rest to a detached cleanup, and return. The proxy also exits once the core is gone, for a kill -9
+on_signal() {
+  trap - EXIT
+  kill -TERM "$child" 2>/dev/null || true
+  detach cleanup
+  exit 130
 }
 
 start_proxy() {
@@ -67,9 +109,12 @@ start_proxy() {
     --cap-drop=ALL --security-opt=no-new-privileges --read-only --memory=128m --pids-limit=64 \
     "$PROXY_IMAGE" 3128 "$ALLOW" "$SESSION" >/dev/null
   docker network connect --alias proxy "$SESSION" "$SESSION-proxy"
+  detach watch_proxy
+  watcher=$!
 }
 
-# $1: mcp or cli. The rest is the command inside the container
+# $1: mcp or cli. The rest is the command inside the container. Called with &, and exec makes $! docker itself,
+# which passes a signal on to the core
 run_core() {
   local mode="$1" opts=()
   shift
@@ -78,7 +123,7 @@ run_core() {
   elif [ -t 1 ]; then
     opts=(-e "COLUMNS=$(tput cols 2>/dev/null || echo 120)" -e FORCE_COLOR=1)
   fi
-  docker run --rm --init --pull never "${opts[@]}" --name "$SESSION-core" --label "flights.pid=$$" \
+  exec docker run --rm --init --pull never ${opts[@]+"${opts[@]}"} --name "$SESSION-core" --label "flights.pid=$$" \
     --network "$SESSION" -e "HTTPS_PROXY=$PROXY" -e "https_proxy=$PROXY" -e "HTTP_PROXY=$PROXY" -e "http_proxy=$PROXY" \
     -e "FLIGHTS_LINKS=$LINKS" --read-only --tmpfs /tmp:size=64m --cap-drop=ALL --security-opt=no-new-privileges \
     --memory=512m --pids-limit=128 \
@@ -89,19 +134,19 @@ case "${1:-}" in
   build) build; exit ;;
   image) echo "$IMAGE"; exit ;;
   selftest) exec python3 -I "$HERE/tests/selftest.py" "$HERE/bin/flights" ;;
-  test) shift; exec "$HERE/tests/run.sh" "$IMAGE" "$@" ;;
+  test) shift; "$HERE/tests/bash32.sh" "$IMAGE" "$BASH32"; exec "$HERE/tests/run.sh" "$IMAGE" "$@" ;;
   # exec, because the pull may rewrite this very script while bash is still reading it
   update) exec sh -c 'git -C "$1" pull --ff-only && "$1/install.sh"' sh "$HERE" ;;
   "" | -h | --help | help) usage; exit ;;
 esac
 
 sweep
+watcher=
 trap cleanup EXIT
 docker network create --internal --label "flights.pid=$$" "$SESSION" >/dev/null
 
-# The core starts first and the proxy comes up meanwhile. docker runs in the background so that a
-# signal (Claude Code stops the MCP with SIGTERM) reaches this script, which removes the containers
-# right away. The MCP needs its stdin, passed through fd 3
+# The core starts first and the proxy comes up meanwhile. docker runs in the background so that a signal reaches
+# this script (on_signal). The MCP needs its stdin, passed through fd 3
 if [ "$1" = mcp ]; then
   exec 3<&0
   run_core mcp python -I -m letsfly.tools <&3 &
@@ -109,7 +154,7 @@ else
   run_core cli python -I -m letsfly "$@" &
 fi
 child=$!
-trap 'cleanup; kill -TERM "$child" 2>/dev/null || true' TERM INT HUP
+trap on_signal TERM INT HUP
 if ! start_proxy; then
   echo "flights: the proxy did not start; if the images are missing, run: flights build" >&2
   cleanup
@@ -117,8 +162,6 @@ if ! start_proxy; then
 fi
 rc=0
 wait "$child" || rc=$?
-# A signal interrupts the first wait; the second one waits for docker to really finish
-if kill -0 "$child" 2>/dev/null; then wait "$child" || rc=$?; fi
 # 125 is a docker error before the core starts, almost always a missing image
 [ "$rc" != 125 ] || echo "flights: if the image $IMAGE is missing, run: flights build" >&2
 exit "$rc"
