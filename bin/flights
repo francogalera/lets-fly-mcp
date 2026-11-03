@@ -19,7 +19,8 @@ IMAGE="lets-fly-core:$(cd "$HERE" && find src/letsfly docker -type f ! -path '*/
 PROXY_IMAGE="lets-fly-proxy:$("${SHA[@]}" "$HERE/docker/proxy.py" | cut -c1-12)"
 ALLOW=www.google.com,promociones-aereas.com.ar
 LOG="${XDG_STATE_HOME:-$HOME/.local/state}/flights/egress.log"
-LINKS="$HERE/local/flight-links"
+# Not XDG_STATE_HOME: the service and some clients start without it, and every caller must find the same folder
+LINKS="$HOME/.local/state/flights/links"
 SESSION="flights-$$-$RANDOM"
 PROXY=http://proxy:3128
 # bash as macOS ships it, for the tests
@@ -34,6 +35,7 @@ usage: flights COMMAND [ARGS]
   airports QUERY                               airports by code, city or name
   audit                                        live data checks: pair prices, dates, a burst
   mcp                                          the MCP server over stdio, for the flights agent
+  links                                        the link server, which install.sh runs as a service
   update                                       pull this repo and reinstall: images, agent, skill, clients
   build                                        rebuild both images after changing src/ or docker/
   image                                        tag of the core image
@@ -125,13 +127,14 @@ run_core() {
   fi
   exec docker run --rm --init --pull never ${opts[@]+"${opts[@]}"} --name "$SESSION-core" --label "flights.pid=$$" \
     --network "$SESSION" -e "HTTPS_PROXY=$PROXY" -e "https_proxy=$PROXY" -e "HTTP_PROXY=$PROXY" -e "http_proxy=$PROXY" \
-    -e "FLIGHTS_LINKS=$LINKS" --read-only --tmpfs /tmp:size=64m --cap-drop=ALL --security-opt=no-new-privileges \
+    -e FLIGHTS_LINKS=1 --read-only --tmpfs /tmp:size=64m --cap-drop=ALL --security-opt=no-new-privileges \
     --memory=512m --pids-limit=128 \
-    "$IMAGE" "$@" 2> >(python3 -I "$HERE/src/letsfly/links.py" "$LINKS")
+    "$IMAGE" "$@" 2> >(python3 -I "$HERE/src/letsfly/links.py" record "$LINKS" "$COMMAND-$$")
 }
 
 case "${1:-}" in
   build) build; exit ;;
+  links) exec python3 -I "$HERE/src/letsfly/links.py" serve "$LINKS" ;;
   image) echo "$IMAGE"; exit ;;
   selftest) exec python3 -I "$HERE/tests/selftest.py" "$HERE/bin/flights" ;;
   test) shift; "$HERE/tests/bash32.sh" "$IMAGE" "$BASH32"; exec "$HERE/tests/run.sh" "$IMAGE" "$@" ;;
@@ -140,6 +143,8 @@ case "${1:-}" in
   "" | -h | --help | help) usage; exit ;;
 esac
 
+COMMAND=$1
+python3 -I "$HERE/src/letsfly/links.py" ensure </dev/null || true
 sweep
 watcher=
 trap cleanup EXIT
