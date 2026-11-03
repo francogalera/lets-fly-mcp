@@ -3,13 +3,14 @@
 terminal and the MCP, live replies against their output schema, the proxy, and nothing left behind or let out.
 Usage: selftest.py PATH_TO_bin/flights"""
 import datetime
+import http.client
 import json
 import os
+import re
 import signal
 import subprocess
 import sys
 import time
-import urllib.parse
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "src"))
 from letsfly.mcp import problems  # noqa: E402  stdlib only, so it runs on the host
@@ -44,13 +45,21 @@ def fits(name, schema, res):
 
 
 def page_ok(link):
-    """A short link names a page on this machine that redirects to a Google Flights booking page."""
-    path = urllib.parse.unquote(link[len("file://"):]) if link and link.startswith("file://") else ""
-    time.sleep(0.5)  # the page is written from the core's stderr, which can trail its reply by a moment
-    if not os.path.exists(path):
+    """A short link answers on this machine with a redirect to a Google Flights booking page."""
+    found = re.fullmatch(r"http://127\.0\.0\.1:(\d+)(/[a-z2-7]{8})", link or "")
+    if not found:
         return False
-    with open(path) as f:
-        return "url=https://www.google.com/travel/flights/booking?" in f.read()
+    time.sleep(0.5)  # the link is recorded from the core's stderr, which can trail its reply by a moment
+    conn = http.client.HTTPConnection("127.0.0.1", int(found.group(1)), timeout=5)
+    try:
+        conn.request("GET", found.group(2))
+        res = conn.getresponse()
+        return res.status == 302 and res.getheader("Location", "").startswith(
+            "https://www.google.com/travel/flights/booking?")
+    except OSError:
+        return False
+    finally:
+        conn.close()
 
 
 def leftovers(pid):
@@ -145,8 +154,8 @@ def main():
               f"{len(rows)} options, from USD {rows[0]['price']:.0f}" if rows else problem(data))
         check("MCP: search_flights with layovers and operator per direction",
               bool(rows) and all({"layovers", "operated_by"} <= r[d].keys() for r in rows for d in ("out", "back")))
-        check("MCP: booking links are short and their page redirects to Google", bool(rows) and page_ok(rows[0].get("link")),
-              (rows[0].get("link") or "no link") if rows else "no results")
+        check("MCP: booking links are short and the link server redirects them to Google",
+              bool(rows) and page_ok(rows[0].get("link")), (rows[0].get("link") or "no link") if rows else "no results")
         check("MCP: short reply (under 4000 characters)", len(text) < 4000, f"{len(text)} characters")
         fits("search_flights", schemas.get("search_flights"), res)
         res = mcp.call("tools/call", {"name": "cheapest_dates", "arguments": {

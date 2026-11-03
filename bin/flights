@@ -125,9 +125,9 @@ run_core() {
   fi
   exec docker run --rm --init --pull never ${opts[@]+"${opts[@]}"} --name "$SESSION-core" --label "flights.pid=$$" \
     --network "$SESSION" -e "HTTPS_PROXY=$PROXY" -e "https_proxy=$PROXY" -e "HTTP_PROXY=$PROXY" -e "http_proxy=$PROXY" \
-    -e "FLIGHTS_LINKS=$LINKS" --read-only --tmpfs /tmp:size=64m --cap-drop=ALL --security-opt=no-new-privileges \
+    -e FLIGHTS_LINKS=1 --read-only --tmpfs /tmp:size=64m --cap-drop=ALL --security-opt=no-new-privileges \
     --memory=512m --pids-limit=128 \
-    "$IMAGE" "$@" 2> >(python3 -I "$HERE/src/letsfly/links.py" "$LINKS")
+    "$IMAGE" "$@" 2> >(python3 -I "$HERE/src/letsfly/links.py" record "$LINKS" "$COMMAND-$$")
 }
 
 case "${1:-}" in
@@ -140,6 +140,8 @@ case "${1:-}" in
   "" | -h | --help | help) usage; exit ;;
 esac
 
+COMMAND=$1
+python3 -I "$HERE/src/letsfly/links.py" ensure </dev/null || true
 sweep
 watcher=
 trap cleanup EXIT

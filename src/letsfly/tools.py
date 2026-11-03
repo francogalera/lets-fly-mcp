@@ -23,7 +23,7 @@ Airports = Annotated[str, "IATA code, or several separated by commas (EZE,AEP)"]
 Day = Annotated[str, "Date YYYY-MM-DD"]
 Stops = Literal["ANY", "NON_STOP", "ONE_STOP", "TWO_PLUS_STOPS"]
 Currency = Annotated[str, "Currency of every price"]
-Link = Annotated[str, "Short local link (file://.../flight-links/<id>.html) that opens the real page"]
+Link = Annotated[str, "Short local link (http://127.0.0.1:18375/<id>) that opens the real page"]
 
 
 class Layover(TypedDict):
