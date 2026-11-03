@@ -22,7 +22,8 @@ BASE = f"http://127.0.0.1:{PORT}"
 UNIT, LABEL = "flights-links.service", "lets-fly.links"
 # bin/flights turns short links on; without it links stay long (the tests)
 ON = os.environ.get("FLIGHTS_LINKS") == "1"
-LINE = re.compile(r"LINK ([a-z2-7]{8}) (https://[^\s\"'<>\\]+)\n?")
+# Surrogates are bytes that were not UTF-8, which no url holds
+LINE = re.compile(r"LINK ([a-z2-7]{8}) (https://[^\s\"'<>\\\ud800-\udfff]+)\n?")
 ID = re.compile(r"/([a-z2-7]{8})")
 _lock = threading.Lock()
 
@@ -32,9 +33,14 @@ def key(url):
     return base64.b32encode(hashlib.sha256(url.encode()).digest()).decode()[:8].lower()
 
 
+def valid(id, url):
+    """A plain https url, and id is its hash."""
+    return bool(LINE.fullmatch(f"LINK {id} {url}")) and id == key(url)
+
+
 def short(url):
     """The short link for url, or url itself when links are off or it is not a plain https link."""
-    if not ON or not LINE.fullmatch(f"LINK {key(url)} {url}"):
+    if not ON or not valid(key(url), url):
         return url
     with _lock:
         sys.stderr.write(f"LINK {key(url)} {url}\n")
@@ -50,27 +56,35 @@ def session_file(root, name, now=None):
 
 
 def record(lines, path, passthrough):
-    """Appends "<id>\\t<url>" for each LINK line whose id is the hash of its url, once per id, to path, which is made
-    at the first link; every other line goes to passthrough."""
-    seen, out = set(), None
+    """Appends "<id>\\t<url>" for each valid LINK line, once per id, to path, which is made at the first link; every
+    other line goes to passthrough. It never stops reading: the core's stderr has no other reader."""
+    seen, out, broken = set(), None, False
     try:
         for line in lines:
             found = LINE.fullmatch(line)
-            if not found or found.group(1) != key(found.group(2)):
+            if not found or not valid(*found.groups()):
                 passthrough.write(line)
                 passthrough.flush()
                 continue
-            if found.group(1) in seen:
+            if found.group(1) in seen or broken:
                 continue
             seen.add(found.group(1))
-            if out is None:
-                os.makedirs(os.path.dirname(path), exist_ok=True)
-                out = open(path, "a", encoding="utf-8")
-            out.write(f"{found.group(1)}\t{found.group(2)}\n")
-            out.flush()
+            try:
+                if out is None:
+                    os.makedirs(os.path.dirname(path), exist_ok=True)
+                    out = open(path, "a", encoding="utf-8")
+                out.write(f"{found.group(1)}\t{found.group(2)}\n")
+                out.flush()
+            except OSError as e:
+                broken = True
+                passthrough.write(f"flights: links of this session cannot be kept in {path}: {e}\n")
+                passthrough.flush()
     finally:
         if out is not None:
-            out.close()
+            try:
+                out.close()
+            except OSError:
+                pass
 
 
 class Index:
@@ -95,6 +109,8 @@ class Index:
     def _read(self, path):
         start = self.offsets.get(path, 0)
         try:
+            if os.stat(path).st_size == start:  # what an unknown id costs: a stat per file, not a read
+                return
             with open(path, "rb") as f:
                 f.seek(start)
                 data = f.read()
@@ -104,7 +120,7 @@ class Index:
         self.offsets[path] = start + end
         for line in data[:end].decode("utf-8", "replace").splitlines():
             id, _, url = line.partition("\t")
-            if LINE.fullmatch(f"LINK {id} {url}") and id == key(url):
+            if valid(id, url):
                 self.urls[id] = url
 
 
@@ -140,26 +156,50 @@ def server(root, port=PORT):
     return httpd
 
 
-def ensure():
-    """Starts the service when nothing answers on PORT. A link handed out meanwhile still opens once it runs."""
+def answers():
     try:
         socket.create_connection(("127.0.0.1", PORT), timeout=0.3).close()
-        return
+        return True
     except OSError:
-        pass
-    start = (["launchctl", "kickstart", f"gui/{os.getuid()}/{LABEL}"] if sys.platform == "darwin"
-             else ["systemctl", "--user", "start", UNIT])
+        return False
+
+
+def ensure(wait=2.0):
+    """Starts the service when nothing answers on PORT, and says so when it still does not: a link handed out
+    meanwhile is kept, and opens once the server runs."""
+    if answers():
+        return
+    env = dict(os.environ)
+    # missing: the exit code when the service is not installed (launchctl's 113 is from its docs, not a Mac)
+    if sys.platform == "darwin":
+        start, missing = ["launchctl", "kickstart", f"gui/{os.getuid()}/{LABEL}"], 113
+    else:
+        start, missing = ["systemctl", "--user", "start", UNIT], 5
+        # Clients other than Claude Code start servers with a short environment, and systemctl needs the user bus
+        env.setdefault("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")
     try:
-        started = subprocess.run(start, capture_output=True, timeout=10).returncode == 0
-    except (OSError, subprocess.TimeoutExpired):
-        started = False
-    if not started:
-        print(f"flights: nothing serves the links on {BASE}; run install.sh", file=sys.stderr)
+        r = subprocess.run(start, capture_output=True, text=True, timeout=10, env=env)
+        why = (r.stderr.strip() or f"{start[0]} exited {r.returncode}") if r.returncode else ""
+        if r.returncode == missing:
+            why += "; run install.sh"
+    except (OSError, subprocess.TimeoutExpired) as e:
+        why = str(e)
+    # A start that returns 0 only means the process was launched, not that it serves
+    deadline = time.monotonic() + (0 if why else wait)
+    while not why and not answers():
+        if time.monotonic() > deadline:
+            why = f"{UNIT if start[0] == 'systemctl' else LABEL} started, but nothing answers"
+        else:
+            time.sleep(0.1)
+    if why:
+        print(f"flights: links open only once {BASE} answers: {why}", file=sys.stderr)
 
 
 if __name__ == "__main__":
     command, args = (sys.argv[1:] or [""])[0], sys.argv[2:]
-    if command == "record":  # record ROOT NAME, from the core's stderr
+    if command == "record":  # record ROOT NAME, from the core's stderr, which is UTF-8 whatever the host's locale
+        for stream in (sys.stdin, sys.stderr):
+            stream.reconfigure(encoding="utf-8", errors="surrogateescape")
         record(sys.stdin, session_file(*args), sys.stderr)
     elif command == "serve":  # serve ROOT
         server(args[0]).serve_forever()

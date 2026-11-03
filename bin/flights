@@ -19,7 +19,8 @@ IMAGE="lets-fly-core:$(cd "$HERE" && find src/letsfly docker -type f ! -path '*/
 PROXY_IMAGE="lets-fly-proxy:$("${SHA[@]}" "$HERE/docker/proxy.py" | cut -c1-12)"
 ALLOW=www.google.com,promociones-aereas.com.ar
 LOG="${XDG_STATE_HOME:-$HOME/.local/state}/flights/egress.log"
-LINKS="$HERE/local/flight-links"
+# Not XDG_STATE_HOME: the service and some clients start without it, and every caller must find the same folder
+LINKS="$HOME/.local/state/flights/links"
 SESSION="flights-$$-$RANDOM"
 PROXY=http://proxy:3128
 # bash as macOS ships it, for the tests
@@ -34,6 +35,7 @@ usage: flights COMMAND [ARGS]
   airports QUERY                               airports by code, city or name
   audit                                        live data checks: pair prices, dates, a burst
   mcp                                          the MCP server over stdio, for the flights agent
+  links                                        the link server, which install.sh runs as a service
   update                                       pull this repo and reinstall: images, agent, skill, clients
   build                                        rebuild both images after changing src/ or docker/
   image                                        tag of the core image
@@ -132,6 +134,7 @@ run_core() {
 
 case "${1:-}" in
   build) build; exit ;;
+  links) exec python3 -I "$HERE/src/letsfly/links.py" serve "$LINKS" ;;
   image) echo "$IMAGE"; exit ;;
   selftest) exec python3 -I "$HERE/tests/selftest.py" "$HERE/bin/flights" ;;
   test) shift; "$HERE/tests/bash32.sh" "$IMAGE" "$BASH32"; exec "$HERE/tests/run.sh" "$IMAGE" "$@" ;;

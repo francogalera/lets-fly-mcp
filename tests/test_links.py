@@ -4,6 +4,8 @@ import contextlib
 import http.client
 import io
 import os
+import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -14,6 +16,7 @@ from letsfly import links
 
 URL = "https://www.google.com/travel/flights/booking?tfs=CBwQAhoeEgoyMDI2LTEyLTEw&curr=USD&hl=en"
 DEAL = "https://promociones-aereas.com.ar/cancún-desde-buenos-aires.html"
+OLD = "https://www.google.com/travel/flights/booking?tfs=old"
 
 
 def line(url):
@@ -71,6 +74,28 @@ class Record(unittest.TestCase):
             self.assertEqual(os.listdir(root), [])
             self.assertEqual(passthrough.getvalue(), "".join(lines))
 
+    def test_a_folder_it_cannot_write_drops_the_links_but_not_the_rest(self):
+        with tempfile.TemporaryDirectory() as root:
+            blocker = os.path.join(root, "2027")
+            open(blocker, "w").close()  # a file where the year's folder goes
+            passthrough = io.StringIO()
+            links.record(io.StringIO(line(URL) + "Traceback\n" + line(DEAL) + "after\n"),
+                         os.path.join(blocker, "03", "24", "x.tsv"), passthrough)
+            out = passthrough.getvalue().splitlines()
+            self.assertEqual([x for x in out if not x.startswith("flights: ")], ["Traceback", "after"])
+            self.assertEqual(sum(x.startswith("flights: links of this session cannot be kept in ") for x in out), 1)
+
+    def test_the_recorder_reads_utf8_whatever_the_locale(self):
+        not_utf8 = b"LINK abcdefgh https://example.test/\xff\n"  # passes through as it came
+        with tempfile.TemporaryDirectory() as root:
+            r = subprocess.run([sys.executable, "-I", "-X", "utf8=0", links.__file__, "record", root, "mcp-1"],
+                               input=(line(DEAL) + "año\n").encode() + not_utf8, capture_output=True, timeout=30,
+                               env={"LC_ALL": "C", "PATH": os.environ.get("PATH", "")})
+            self.assertEqual(r.stderr, "año\n".encode() + not_utf8)
+            [path] = [os.path.join(d, f) for d, _, files in os.walk(root) for f in files]
+            with open(path, encoding="utf-8") as f:
+                self.assertEqual(f.read(), f"{links.key(DEAL)}\t{DEAL}\n")
+
 
 class Server(unittest.TestCase):
     def setUp(self):
@@ -79,8 +104,8 @@ class Server(unittest.TestCase):
         self.root = folder.name
         self.session = os.path.join(self.root, "2027", "03", "24", "164737-mcp-1.tsv")
         links.record(io.StringIO(line(URL)), self.session, io.StringIO())
-        with open(os.path.join(self.root, "old.html"), "w") as f:
-            f.write("a page from before, which the server ignores")
+        with open(os.path.join(self.root, f"{links.key(OLD)}.html"), "w") as f:
+            f.write(f"a page from the file:// links, which the server ignores: {OLD}")
         self.httpd = links.server(self.root, port=0)
         threading.Thread(target=self.httpd.serve_forever, args=(0.05,), daemon=True).start()
         self.addCleanup(self.httpd.server_close)
@@ -102,12 +127,21 @@ class Server(unittest.TestCase):
                          (302, URL))
         self.assertEqual(self.get(f"/{links.key(URL)}", method="HEAD"), (302, URL, b""))
 
-    def test_a_link_recorded_after_the_server_started_opens_too(self):
-        later = os.path.join(self.root, "2027", "03", "25", "090000-mcp-2.tsv")
-        links.record(io.StringIO(line(DEAL)), later, io.StringIO())
+    def test_a_session_that_starts_after_the_server_opens_too(self):
+        links.record(io.StringIO(line(DEAL)), os.path.join(self.root, "2027", "03", "25", "090000-mcp-2.tsv"),
+                     io.StringIO())
+        self.assertEqual(self.get(f"/{links.key(DEAL)}")[0], 302)
+
+    def test_a_link_appended_after_a_refresh_opens_too(self):
+        self.assertEqual(self.get(f"/{links.key(DEAL)}")[0], 404)
         with open(self.session, "a", encoding="utf-8") as f:
             f.write(f"{links.key(URL + '&x=1')}\t{URL}&x=1\n")
         self.assertEqual(self.get(f"/{links.key(URL + '&x=1')}")[:2], (302, URL + "&x=1"))
+
+    def test_an_unknown_id_reads_no_file_that_did_not_grow(self):
+        with mock.patch("builtins.open", wraps=open) as opened:
+            self.assertEqual(self.get("/aaaaaaaa")[0], 404)
+        self.assertEqual(opened.call_count, 0)
 
     def test_a_url_beyond_ascii_goes_out_percent_encoded(self):
         links.record(io.StringIO(line(DEAL)), self.session, io.StringIO())
@@ -117,7 +151,7 @@ class Server(unittest.TestCase):
     def test_anything_else_is_not_found(self):
         port = self.httpd.server_address[1]
         for path, host in ((f"/{links.key('https://nowhere.test/')}", None), ("/", None), ("/favicon.ico", None),
-                           (f"/{links.key(URL)}/", None), (f"/{links.key(URL)}?x", None), ("/old", None),
+                           (f"/{links.key(URL)}/", None), (f"/{links.key(URL)}?x", None), (f"/{links.key(OLD)}", None),
                            (f"/{links.key(URL)}", f"evil.test:{port}")):
             self.assertEqual(self.get(path, host)[:2], (404, None), (path, host))
 
@@ -130,6 +164,41 @@ class Server(unittest.TestCase):
         with open(partial, "a", encoding="utf-8") as f:
             f.write(f"{DEAL[30:]}\n")
         self.assertEqual(self.get(f"/{links.key(DEAL)}")[0], 302)
+
+
+class Ensure(unittest.TestCase):
+    def started(self):
+        return mock.patch.object(links.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, "", ""))
+
+    def test_nothing_starts_when_the_server_answers(self):
+        with mock.patch.object(links, "answers", return_value=True), self.started() as run:
+            links.ensure()
+        run.assert_not_called()
+
+    def test_a_start_that_serves_nothing_is_reported(self):
+        with mock.patch.object(links, "answers", return_value=False), self.started(), \
+                contextlib.redirect_stderr(io.StringIO()) as stderr:
+            links.ensure(wait=0.2)
+        self.assertIn("started, but nothing answers", stderr.getvalue())
+
+    def test_a_service_that_is_not_installed_says_what_to_do(self):
+        error = "Failed to start flights-links.service: Unit flights-links.service not found.\n"
+        missing = subprocess.CompletedProcess([], 5, "", error)  # systemctl's exit code for it
+        with mock.patch.object(links, "answers", return_value=False), \
+                mock.patch.object(links.sys, "platform", "linux"), \
+                mock.patch.object(links.subprocess, "run", return_value=missing), \
+                contextlib.redirect_stderr(io.StringIO()) as stderr:
+            links.ensure()
+        self.assertTrue(stderr.getvalue().endswith("Unit flights-links.service not found.; run install.sh\n"),
+                        stderr.getvalue())
+
+    def test_systemctl_reaches_the_user_bus_from_a_short_environment(self):
+        with mock.patch.object(links, "answers", side_effect=[False, True]), \
+                mock.patch.object(links.sys, "platform", "linux"), mock.patch.dict(os.environ, {}, clear=True), \
+                self.started() as run, contextlib.redirect_stderr(io.StringIO()) as stderr:
+            links.ensure()
+        self.assertEqual(run.call_args.kwargs["env"]["XDG_RUNTIME_DIR"], f"/run/user/{os.getuid()}")
+        self.assertEqual(stderr.getvalue(), "")
 
 
 if __name__ == "__main__":

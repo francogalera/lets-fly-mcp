@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 """Points the MCP clients found on this machine at bin/flights: Claude Desktop, Codex, and a plugin in the personal
-marketplace that ChatGPT Desktop installs. Run by install.sh; safe to run again. Usage: install_clients.py REPO"""
+marketplace that ChatGPT Desktop installs. Then runs the link server as a service of the user. Run by install.sh;
+safe to run again. Python 3.9, as macOS ships it. Usage: install_clients.py REPO"""
 import json
 import os
+import plistlib
 import shutil
 import subprocess
 import sys
+import time
 
 REPO = os.path.realpath(sys.argv[1])
 FLIGHTS = os.path.join(REPO, "bin", "flights")
@@ -13,6 +16,10 @@ HOME = os.path.expanduser("~")
 # Clients other than Claude Code start servers with a short environment, so the Docker endpoint goes with them
 DOCKER = {k: os.environ[k] for k in ("DOCKER_HOST", "DOCKER_CONTEXT") if os.environ.get(k)}
 SERVER = {"command": FLIGHTS, "args": ["mcp"], **({"env": DOCKER} if DOCKER else {})}
+sys.path.insert(0, os.path.join(REPO, "src"))
+from letsfly.links import BASE, LABEL, UNIT  # noqa: E402  stdlib only, so it runs on the host
+# The service runs the installed command, which install.sh points at this checkout, not this checkout's path
+SERVE = [os.path.join(HOME, ".local", "bin", "flights"), "links"]
 
 
 def write(path, text):
@@ -87,11 +94,52 @@ def plugin():
     return "Plugin: flights in the personal marketplace; install it from ChatGPT Desktop's Plugins Directory"
 
 
+def links():
+    """Started at login and again if it fails: systemd on Linux, launchd on macOS. Restarted, so an update counts."""
+    return launchd() if sys.platform == "darwin" else systemd()
+
+
+def systemd():
+    path = os.path.join(os.environ.get("XDG_CONFIG_HOME") or os.path.join(HOME, ".config"), "systemd", "user", UNIT)
+    write(path, f"[Unit]\nDescription=flights: short links on {BASE}\n\n"
+                "[Service]\nExecStart=%h/.local/bin/flights links\nRestart=on-failure\nRestartSec=2\n\n"
+                "[Install]\nWantedBy=default.target\n")
+    for step in (["daemon-reload"], ["enable", UNIT], ["restart", UNIT]):
+        error = _run("systemctl", "--user", *step)
+        if error:
+            return f"Links: wrote {path}, but systemctl --user {step[0]} failed: {error}"
+    return f"Links: {BASE}, served by the systemd user service {UNIT}"
+
+
+def launchd():
+    """Written to the launchd docs, not yet run on a Mac."""
+    path = os.path.join(HOME, "Library", "LaunchAgents", f"{LABEL}.plist")
+    write(path, plistlib.dumps({"Label": LABEL, "ProgramArguments": SERVE, "RunAtLoad": True,
+                                "KeepAlive": True}).decode())
+    domain = f"gui/{os.getuid()}"
+    _run("launchctl", "bootout", domain, path)  # fails when it was not loaded, which is fine
+    for _ in range(10):  # bootout returns before the job is gone, and bootstrap fails until it is
+        error = _run("launchctl", "bootstrap", domain, path)
+        if not error:
+            return f"Links: {BASE}, served by the launchd agent {LABEL}"
+        time.sleep(0.5)
+    return f"Links: wrote {path}, but launchctl bootstrap failed: {error}"
+
+
+def _run(*args):
+    """The error of a command, or None when it worked."""
+    try:
+        r = subprocess.run(args, capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return str(e)
+    return ((r.stderr or r.stdout).strip() or f"exit {r.returncode}") if r.returncode else None
+
+
 def _made(path):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     return path
 
 
 if __name__ == "__main__":
-    for setup in (claude_desktop, codex, plugin):
+    for setup in (claude_desktop, codex, plugin, links):
         print(setup())

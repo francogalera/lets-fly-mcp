@@ -19,6 +19,7 @@ promociones-aereas.com.ar deals, behind an MCP server, isolated in Docker. Runs 
     flights --help                       every command
     flights search EZE MIA 2026-12-10    also: dates, airports; --json prints what the agent gets
     flights mcp                          the MCP server over stdio
+    flights links                        the link server, which install.sh runs as a service (see Links)
     flights test                         offline tests inside the image, and the launcher on bash 3.2
     flights selftest                     live check: searches, MCP and its schemas, network blocking, cleanup
     flights audit                        live data checks against Google: pair prices, dates, a burst
@@ -50,11 +51,15 @@ with them, and Claude Code (2.1.316) shows the file in the file manager instead 
 
 The core prints `LINK <id> <url>` on stderr, and `bin/flights` pipes it through `src/letsfly/links.py record`,
 which keeps it only when `<id>` is the hash of `<url>`, in one file per session (for the MCP, a client's session):
-`local/flight-links/YYYY/MM/DD/HHMMSS-<command>-<pid>.tsv`, one `<id>`, tab, `<url>` per line.
-`links.py serve` answers each id with a redirect to its link and anything else with a 404, only on 127.0.0.1. It
+`~/.local/state/flights/links/YYYY/MM/DD/HHMMSS-<command>-<pid>.tsv`, one `<id>`, tab, `<url>` per line. Every
+checkout writes there, so the links outlive any of them.
+`flights links` answers each id with a redirect to its link and anything else with a 404, only on 127.0.0.1. It
 runs as a service of the user that `install.sh` sets up (systemd on Linux, launchd on macOS) and `bin/flights`
-starts when nothing answers. The files are what lasts: a link handed out while the server was down opens once it
-runs, and the port never changes, so links in old answers keep working. The container still mounts nothing.
+starts when nothing answers, saying so when it still does not. The service runs the installed `flights`, so it
+follows `install.sh`. The files are what lasts: a link handed out while the server was down opens once it runs,
+and the port never changes, so links in old answers keep working. The container still mounts nothing.
+On macOS, a launchd agent cannot read a repo under `~/Documents`, `~/Desktop` or `~/Downloads`, so keep the repo
+elsewhere (not yet tried on a Mac).
 
 ## Schemas
 

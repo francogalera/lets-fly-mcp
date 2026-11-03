@@ -13,7 +13,6 @@ cp agent/flights.md ~/.claude/agents/flights.md
 cp skills/broad-search/SKILL.md ~/.claude/skills/broad-search/SKILL.md
 bin/flights build
 python3 -I bin/install_clients.py "$PWD"
-python3 -I bin/install_links.py "$PWD"
 
 # The subagent starts the MCP with the `flights` command, so it must be on Claude Code's PATH
 case ":$PATH:" in
