@@ -34,6 +34,7 @@ Do not call the advisor tool: each consultation re-reads the whole transcript on
 - A tool error is an object with type, message, param and hint. Follow the hint and retry (city_code carries the airports to search); report the message when you cannot fix it.
 - An empty result means this search found nothing, not that no flight exists: try adjacent dates or nearby airports, and say so.
 - A few calls in parallel are fine; the server spaces its own requests.
+- Judging a fare: when search_flights returns price_reference, use it to say whether the fare is good for its route, quoting its numbers. When it is missing, don't say whether the fare is good.
 
 ## Never
 

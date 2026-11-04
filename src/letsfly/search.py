@@ -18,30 +18,37 @@ CONSENT_HINT = ". From an EU/EEA IP Google may serve its consent page, which has
 
 def flights(search):
     """One way: itineraries, cheapest first. Round trip: (outbound, return) pairs for the 5 cheapest outbounds.
-    Also returns how many of those outbounds lost their returns because the page failed to load."""
-    outbounds = _fetch(search)
+    Also returns how many of those outbounds lost their returns because the page failed to load, and Google's price
+    reference, which only the first page carries."""
+    data = _page(search)
+    reference = decode.price_reference(data)
+    outbounds = _rows(data, search)
     if not outbounds or len(search.dates) == 1:
-        return outbounds or [], 0
+        return outbounds or [], 0, reference
     expanded = list(POOL.map(lambda outbound: _returns(search, outbound), outbounds[:TOP_N]))
     errors = [backs for _, backs in expanded if isinstance(backs, SearchError)]
     if len(errors) == len(expanded):
         raise errors[0]
     pairs = [(outbound, back) for outbound, backs in expanded if not isinstance(backs, SearchError)
              for back in backs or []]
-    return pairs, len(errors)
+    return pairs, len(errors), reference
 
 
 def _returns(search, outbound):
     try:
-        return outbound, _fetch(search, outbound)
+        return outbound, _rows(_page(search, outbound), search)
     except SearchError as e:
         return outbound, e
 
 
-def _fetch(search, outbound=None):
+def _page(search, outbound=None):
     data = page.fetch_ds1(tfs.search_page(search, search.dates, outbound))
     if data is None:
         raise SearchUnreadable(NO_PAYLOAD[0].upper() + NO_PAYLOAD[1:])
+    return data
+
+
+def _rows(data, search):
     try:
         rows = [row for index in (2, 3) if isinstance(data[index], list) for row in data[index][0]]
     except (IndexError, TypeError) as e:
