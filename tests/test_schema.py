@@ -5,7 +5,7 @@ import typing
 import unittest
 from unittest import mock
 
-from fake_pages import days, page
+from fake_pages import days, page, reference
 from letsfly import client, errors, mcp, models, promos, tools
 from test_decode import BACK, GLUED, NIGHT, REGIONAL, TODAY
 from test_mcp import converse
@@ -64,6 +64,7 @@ class OutputSchema(unittest.TestCase):
         self.assertEqual(sorted(self.schemas), sorted(TOOLS))
         paths = {name: dict(fields(schema)) for name, schema in self.schemas.items()}
         self.assertIn("flights[].out.layovers[].overnight", paths["search_flights"])
+        self.assertIn("price_reference.history.weekly", paths["search_flights"])
         self.assertIn("deals[].details.dates[].to", paths["promociones-aereas"])
         self.assertIn("error.hint", paths["find_airports"])
         for name, found in paths.items():
@@ -79,6 +80,15 @@ class OutputSchema(unittest.TestCase):
         out = tools.search_flights("EZE", "BOS", "2026-12-10", "2026-12-20")
         self.assertEqual(len(out["flights"]), 3)
         self.fits("search_flights", out)
+
+    def test_reference_fits(self):
+        full = reference(2, 48, 62, 40, 145, [[1_788_472_800_000, 44], [1_788_559_200_000, 45]])
+        partial = [2, [None, 48], None, None, None, None, 1, None, None, None, None]
+        for block in (full, reference(3, 1111, 1036, 980, 1200), partial):
+            client.fetch = lambda url, block=block: page([REGIONAL], block)
+            out = tools.search_flights("EZE", "BOS", "2026-12-10")
+            self.assertIn("price_reference", out)
+            self.fits("search_flights", out)
 
     def test_dates_fit(self):
         def fetch(url):

@@ -72,7 +72,7 @@ check results, as MCP asks them to: output objects accept extra fields, and the 
 ## Tests
 
 `flights test` runs offline. A few `ds:1` rows written by hand pin the decode: the pair price, the operator, the
-bags, the airport change, `overnight` and `self_transfer`. The output of the 4 tools and every error kind are
+bags, the airport change, `overnight`, `self_transfer` and `price_reference`. The output of the 4 tools and every error kind are
 checked against the published schemas, which `flights selftest` also does with live replies.
 
 ## Credits

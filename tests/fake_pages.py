@@ -22,8 +22,14 @@ def row(legs, price, minutes, carry_on=None, checked=None, self_transfer=False):
     return [detail, [[price]], None, None, [None] * 6 + [[checked, carry_on]]]
 
 
-def page(rows):
-    data = json.dumps([None, None, [rows], None])
+def reference(level, lowest, typical, low, high, points=None):
+    """The block Google puts at data[5]; points are [timestamp_ms, price] pairs."""
+    money = [[None, n] for n in (lowest, typical, typical - lowest, low, high)]
+    return [level, *money, 1, None, None, None, [points] if points else None, None, "London"]
+
+
+def page(rows, price_reference=None):
+    data = json.dumps([None, None, [rows], None] + ([None, price_reference] if price_reference else []))
     return f"<script>AF_initDataCallback({{key: 'ds:1', hash: '1', data:{data}, sideChannel: {{}}}});</script>"
 
 

@@ -59,11 +59,28 @@ class Flight(TypedDict):
     link: NotRequired[Annotated[str, "Short local link to this row's booking page on Google Flights"]]
 
 
+PriceHistory = TypedDict("PriceHistory", {
+    "from": Annotated[str, "Date of the first price in weekly, YYYY-MM-DD"],
+    "weekly": Annotated[list[float], "Lowest fare every 7 days, oldest first; the last one is the latest day"],
+    "min": Annotated[float, "Lowest fare of the whole daily series, about the last 2 months"],
+    "max": Annotated[float, "Highest fare of the whole daily series"],
+})
+
+
+class PriceReference(TypedDict):
+    lowest: Annotated[float | None, "Lowest fare on Google's page, before the airlines and departure_window filters"]
+    typical: Annotated[float | None, "What Google considers a typical fare for this search"]
+    low: Annotated[float | None, "Bottom of the typical range"]
+    high: Annotated[float | None, "Top of the typical range"]
+    history: Annotated[PriceHistory | None, "How lowest moved; null when Google gives none, as with over 1 adult"]
+
+
 class FlightsResult(TypedDict):
     currency: Currency
     count: Annotated[int, "Rows in flights"]
     flights: Annotated[list[Flight], "The cheapest of each distinct outbound first, then the rest, cheapest first"]
     note: NotRequired[Annotated[str, "Why some round trips are missing"]]
+    price_reference: NotRequired[Annotated[PriceReference, "Google's reference; missing if it gives none"]]
 
 
 DateRow = TypedDict("DateRow", {
@@ -186,14 +203,14 @@ def search_flights(
     rest, cheapest first. price is the fare for all adults; on a round trip, for that outbound and return pair
     (price_estimated: the pair had no quote, the outbound's price stands in). bags: what the fare includes; null is
     Google not saying, not zero. self_transfer: separate tickets, a missed connection is the traveller's problem.
-    out and back: route (AEP/EZE lands at one airport, leaves from the other), flights, local times, hours,
-    layovers (overnight: touches 00:00 to 05:00; change_of_airport: the next leg leaves from another airport) and
-    operated_by (flight to the company flying it when not the seller, else null). link, on the first 2 rows or all
-    with all_links: a short local link to the row's booking page, to pass on unchanged. note: some round trips are
-    missing because their return page failed."""
+    route AEP/EZE and change_of_airport: the next leg leaves from another airport. overnight: touches 00:00 to 05:00.
+    operated_by: who flies a leg when not the seller. link, on the first 2 rows or all with all_links: a short local
+    link to the row's booking page, to pass on unchanged. note: some round trips are missing because their return
+    page failed. price_reference, missing if Google gives none and blind to airlines and departure_window: lowest,
+    typical, its range low to high, in price's terms; history: lowest every week since from, min and max."""
     query = params.flight_search(origin, destination, date, return_date, max_stops, airlines, departure_window,
                                  adults, cabin, currency)
-    found, lost = search.flights(query)
+    found, lost, reference = search.flights(query)
 
     rows = []
     for index, trip in enumerate(_varied(sorted(found, key=lambda f: _priced(f).price or float("inf")))[:limit]):
@@ -215,6 +232,8 @@ def search_flights(
     out = {"currency": currency, "count": len(rows), "flights": rows}
     if lost:
         out["note"] = f"The return page failed to load for {lost} of the outbounds, so their round trips are missing"
+    if reference:
+        out["price_reference"] = reference
     return out
 
 
