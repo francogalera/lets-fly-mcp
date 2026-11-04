@@ -62,17 +62,17 @@ class Flight(TypedDict):
 PriceHistory = TypedDict("PriceHistory", {
     "from": Annotated[str, "Date of the first price in weekly, YYYY-MM-DD"],
     "weekly": Annotated[list[float], "Lowest fare every 7 days, oldest first; the last one is the latest day"],
-    "min": Annotated[float, "Lowest fare of the whole daily series, about the last 2 months"],
+    "min": Annotated[float, "Lowest fare of the whole daily series, at most about 2 months"],
     "max": Annotated[float, "Highest fare of the whole daily series"],
 })
 
 
 class PriceReference(TypedDict):
-    lowest: Annotated[float | None, "Lowest fare on Google's page, before the airlines and departure_window filters"]
+    lowest: Annotated[float | None, "Lowest fare of the first page, before the airlines and departure_window filters; a round trip row can come below it"]
     typical: Annotated[float | None, "What Google considers a typical fare for this search"]
     low: Annotated[float | None, "Bottom of the typical range"]
     high: Annotated[float | None, "Top of the typical range"]
-    history: Annotated[PriceHistory | None, "How lowest moved; null when Google gives none, as with over 1 adult"]
+    history: Annotated[PriceHistory | None, "How lowest moved; null when Google gives none, as with over 1 adult or in first class"]
 
 
 class FlightsResult(TypedDict):
@@ -200,14 +200,11 @@ def search_flights(
     all_links: Annotated[bool, "Booking link on every row; by default only the first 2 rows carry one"] = False,
 ) -> FlightsResult:
     """Flights on one date, or round trips with return_date: the cheapest of each distinct outbound first, then the
-    rest, cheapest first. price is the fare for all adults; on a round trip, for that outbound and return pair
-    (price_estimated: the pair had no quote, the outbound's price stands in). bags: what the fare includes; null is
-    Google not saying, not zero. self_transfer: separate tickets, a missed connection is the traveller's problem.
-    route AEP/EZE and change_of_airport: the next leg leaves from another airport. overnight: touches 00:00 to 05:00.
-    operated_by: who flies a leg when not the seller. link, on the first 2 rows or all with all_links: a short local
-    link to the row's booking page, to pass on unchanged. note: some round trips are missing because their return
-    page failed. price_reference, missing if Google gives none and blind to airlines and departure_window: lowest,
-    typical, its range low to high, in price's terms; history: lowest every week since from, min and max."""
+    rest, cheapest first. price is for all adults; on a round trip, for the pair (price_estimated: the outbound's
+    price stands in). null bags: Google does not say. self_transfer: separate tickets. route AEP/EZE and
+    change_of_airport: the next leg leaves from another airport. overnight: touches 00:00 to 05:00. operated_by: who
+    flies a leg when not the seller. price_reference, blind to airlines and departure_window: lowest (a pair can beat
+    it), typical, range low to high, in price's terms; history: weekly lowest since from, daily min and max."""
     query = params.flight_search(origin, destination, date, return_date, max_stops, airlines, departure_window,
                                  adults, cabin, currency)
     found, lost, reference = search.flights(query)

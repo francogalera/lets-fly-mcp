@@ -18,6 +18,8 @@ BACK = row([leg("AA953", "BOS", "EZE", "2026-12-20 21:00", "2026-12-21 10:30", "
 DAY_MS = 86_400_000
 MADRID_SEP_4 = 1_788_472_800_000  # Midnight in Madrid, 22:00 UTC the day before
 BUENOS_AIRES_SEP_4 = 1_788_490_800_000  # Midnight in Buenos Aires, 03:00 UTC the same day
+HONOLULU_SEP_4 = 1_788_516_000_000  # Midnight in Honolulu, 10:00 UTC the same day, the westernmost that holds
+AUCKLAND_SUMMER_SEP_4 = 1_788_433_200_000  # Midnight at UTC+13, 11:00 UTC the day before, the easternmost that holds
 
 
 class Decode(unittest.TestCase):
@@ -71,7 +73,7 @@ class Reference(unittest.TestCase):
                                    "min": 50, "max": 200})
 
     def test_the_day_is_the_origin_s_on_either_side_of_utc(self):
-        for stamp in (MADRID_SEP_4, BUENOS_AIRES_SEP_4):
+        for stamp in (MADRID_SEP_4, BUENOS_AIRES_SEP_4, HONOLULU_SEP_4, AUCKLAND_SUMMER_SEP_4):
             history = decode.price_reference([None] * 5 + [reference(2, 48, 62, 40, 145, [[stamp, 44]])])["history"]
             self.assertEqual(history, {"from": "2026-09-04", "weekly": [44], "min": 44, "max": 44})
 
@@ -87,14 +89,16 @@ class Reference(unittest.TestCase):
                 self.assertIsNone(decode.price_reference(data))
 
     def test_an_unusable_number_is_null_never_zero(self):
-        block = [2, [None, 0], [None, float("inf")], None, [None, True], [None, "48"], 1, None, None, None, None]
-        self.assertIsNone(decode.price_reference([None] * 5 + [block]))
+        for bad in (0, -5, True, "48", float("inf"), 10 ** 400):
+            with self.subTest(bad=repr(bad)[:10]):
+                block = [2, [None, bad], [None, bad], None, [None, bad], [None, bad], 1, None, None, None, None]
+                self.assertIsNone(decode.price_reference([None] * 5 + [block]))
         block[2] = [None, 62]
         self.assertEqual(decode.price_reference([None] * 5 + [block]),
                          {"lowest": None, "typical": 62, "low": None, "high": None, "history": None})
 
     def test_a_bad_history_does_not_sink_the_reference(self):
-        for points in (["junk", ["x", 5], [MADRID_SEP_4, None], [MADRID_SEP_4, 0]], [[10 ** 30, 44]]):
+        for points in (["junk", ["x", 5], [MADRID_SEP_4, None], [MADRID_SEP_4, 0]], [[10 ** 30, 44]], [[10 ** 400, 44]]):
             with self.subTest(points):
                 block = reference(2, 48, 62, 40, 145)
                 block[10] = [points]

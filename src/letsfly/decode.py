@@ -5,7 +5,7 @@ from letsfly.models import Itinerary, Layover, Leg
 
 NIGHT_ENDS = time(5)
 WEEK = 7
-MIDDAY = timedelta(hours=12)
+TO_ORIGIN_DAY = timedelta(hours=13)
 # A malformed row raises, and plain indexing raises on purpose: the exception type decides whether the row is
 # skipped or the whole search fails (an IndexError only gets past the flight search, not the date sweep)
 
@@ -30,12 +30,15 @@ def price_reference(data) -> dict | None:
     data[5] on the first page, in the page's currency, for all adults and on a round trip for the pair. Each amount
     comes as [null, n].
     [0] level, which the page words as 1 low, 2 to 4 typical, 5 high: below [4], inside [4] to [5], above [5].
-    [1] lowest fare, the cheapest row before our own airlines and departure window filters. Follows max_stops.
+    [1] lowest fare of this page, before our own airlines and departure window filters. Follows max_stops. A round
+    trip pair is quoted on its return page and can come below it.
     [2] typical fare. [3] typical minus lowest, positive when cheap, rounded on its own: can differ by 1.
     [4] and [5] the typical range, low and high.
-    [6] the cabin: 1 economy, 3 business. Premium economy and first came without the block.
-    [10] [[[timestamp_ms, lowest that day], ...]], 1 adult only, daily up to today: 61 or 62 days, fewer on far dates.
-    Each timestamp is midnight at the origin, so the nearest UTC midnight is its day (up to UTC+12).
+    [6] the cabin: 1 economy, 3 business, 4 first. Premium economy and some first class searches come without the block.
+    [10] [[[timestamp_ms, lowest that day], ...]], null with over 1 adult and in first class, daily up to today: at
+    most 62 days, fewer on far dates, and how far varies by route.
+    Each timestamp is midnight at the origin, so adding 13 hours lands on its day from UTC-10 to UTC+13: New Zealand
+    in summer and Tonga fit, Pago Pago and Niue (UTC-11) and UTC+14 come out a day off.
     [7] to [9] null, [11] opaque and [12] the destination city, not read.
     Return pages (with the outbound pinned) carry null here."""
     block = _at(data, 5)
@@ -58,7 +61,7 @@ def _history(points):
         return None
     weekly = daily[::-WEEK][::-1]
     try:
-        start = datetime.fromtimestamp(weekly[0][0] / 1000, timezone.utc) + MIDDAY
+        start = datetime.fromtimestamp(weekly[0][0] / 1000, timezone.utc) + TO_ORIGIN_DAY
     except (OverflowError, OSError, ValueError):
         return None
     prices = [price for _, price in daily]
@@ -67,7 +70,7 @@ def _history(points):
 
 
 def _amount(value):
-    usable = isinstance(value, int | float) and not isinstance(value, bool) and 0 < value < float("inf")
+    usable = isinstance(value, int | float) and not isinstance(value, bool) and 0 < value < 1e308
     return float(value) if usable else None
 
 
