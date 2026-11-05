@@ -1,7 +1,7 @@
 """Flight search (one way, or round trip expanding the cheapest outbounds) and the cheapest-date sweep."""
 import threading
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import timedelta
 
 from letsfly import decode, models, page, tfs
@@ -17,15 +17,29 @@ CONSENT_HINT = ". From an EU/EEA IP Google may serve its consent page, which has
 
 
 def flights(search):
-    """One way: itineraries, cheapest first. Round trip: (outbound, return) pairs for the 5 cheapest outbounds.
+    """One way: itineraries, cheapest first. Round trip: (outbound, return) pairs for 5 outbounds, the cheapest,
+    with those the airlines asked for sell first.
     Also returns how many of those outbounds lost their returns because the page failed to load, and Google's price
-    reference, which only the first page carries."""
-    data = _page(search)
-    reference = decode.price_reference(data)
+    reference, which only a first page carries: an unfiltered one, since airlines change it and a window empties it."""
+    unfiltered = replace(search, airlines=set(), window=None, return_window=None)
+    plain = POOL.submit(_page, unfiltered) if unfiltered != search else None
+    try:
+        data = _page(search)
+    except SearchUnreadable:
+        # A code Google does not know empties the page like a block does, but a block empties the unfiltered one too
+        if search.airlines and _loaded(plain) is not None:
+            raise models.ValidationError("Google does not know at least one of these airline codes", "airlines",
+                                         "Check the IATA codes and retry, or search without airlines") from None
+        raise
+    reference = decode.price_reference(_loaded(plain) if plain else data)
     outbounds = _rows(data, search)
+    if plain:
+        outbounds = _completed(outbounds, _loaded(plain), search)
     if not outbounds or len(search.dates) == 1:
         return outbounds or [], 0, reference
-    expanded = list(POOL.map(lambda outbound: _returns(search, outbound), outbounds[:TOP_N]))
+    # Google mixes both kinds by price, and a cheap codeshare must not take the place of a flight the airline sells
+    picked = sorted(outbounds, key=lambda outbound: not _sold_by(outbound, search.airlines))[:TOP_N]
+    expanded = list(POOL.map(lambda outbound: _returns(search, outbound), picked))
     errors = [backs for _, backs in expanded if isinstance(backs, SearchError)]
     if len(errors) == len(expanded):
         raise errors[0]
@@ -34,9 +48,53 @@ def flights(search):
     return pairs, len(errors), reference
 
 
+def _completed(rows, plain, search):
+    """Google's filter can lose rows or prices the page without it has, as an airline and a cabin together can. That
+    page does not look at who sells, so with airlines its price can be another seller's."""
+    kept = [itinerary for itinerary in _decode_all(plain) if _keep(itinerary, search)]
+    prices = {_flight_numbers(itinerary): itinerary.price for itinerary in kept}
+    from_plain = not rows
+    rows = rows or kept
+    for itinerary in rows:
+        filled = itinerary.price is None
+        if filled:
+            itinerary.price = prices.get(_flight_numbers(itinerary))
+        itinerary.price_other_seller = bool(search.airlines) and itinerary.price is not None and (filled or from_plain)
+    return _cheapest_first(rows) or None
+
+
+def _flight_numbers(itinerary):
+    return tuple((leg.airline, leg.flight_number) for leg in itinerary.legs)
+
+
+def _cheapest_first(itineraries):
+    return sorted(itineraries, key=lambda itinerary: (itinerary.price is None, itinerary.price))
+
+
+def split(found, airlines):
+    """(trips those airlines sell on every leg, the rest)."""
+    asked, shared = [], []
+    for trip in found:
+        directions = trip if isinstance(trip, tuple) else (trip,)
+        (asked if all(_sold_by(direction, airlines) for direction in directions) else shared).append(trip)
+    return asked, shared
+
+
+def _sold_by(itinerary, airlines):
+    return not airlines or all(leg.airline in airlines for leg in itinerary.legs)
+
+
+def _loaded(future):
+    """The page of a future, or None: a reference that does not load must not sink the search."""
+    try:
+        return future.result()
+    except SearchError:
+        return None
+
+
 def _returns(search, outbound):
     try:
-        return outbound, _rows(_page(search, outbound), search)
+        return outbound, _rows(_page(search, outbound), replace(search, window=search.return_window))
     except SearchError as e:
         return outbound, e
 
@@ -63,14 +121,14 @@ def _rows(data, search):
     if rows and not found:
         raise SearchUnreadable(f"None of the {len(rows)} flight rows could be read, so Google probably changed their "
                               f"layout. For example: {'; '.join(reasons)}")
-    found = [itinerary for itinerary in found if _keep(itinerary, search)]
-    found.sort(key=lambda itinerary: (itinerary.price is None, itinerary.price))
-    return found or None
+    return _cheapest_first(itinerary for itinerary in found if _keep(itinerary, search)) or None
 
 
 def _keep(itinerary, search):
-    """The filters Google's URL cannot carry: airlines and the departure window."""
-    if search.airlines and not {leg.airline for leg in itinerary.legs} & search.airlines:
+    """Both filters travel in the tfs. This repeats them because a field Google stopped honoring would otherwise pass
+    every row as filtered. An airline counts on a leg it sells, with its own code or as a codeshare."""
+    if search.airlines and not any(leg.airline in search.airlines or search.airlines & leg.sold_as.keys()
+                                   for leg in itinerary.legs):
         return False
     if search.window is None:
         return True

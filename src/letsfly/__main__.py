@@ -18,12 +18,13 @@ def main():
     d.add_argument("--limit", type=int, default=10)
     a = sub.add_parser("airports", help="finds airports by code or name")
     a.add_argument("query")
-    sub.add_parser("audit", help="live checks of the data against Google: pair prices, dates, a burst")
+    u = sub.add_parser("audit", help="live checks of the data against Google: pair prices, dates, a burst, the filters")
+    u.add_argument("only", nargs="?", choices=["filters"], help="only whether Google honors the filters")
     for p in (f, d, a):
         p.add_argument("--json", action="store_true", help="the reply exactly as the agent gets it")
     args = vars(cli.parse_args())
     if args["command"] == "audit":
-        return audit.main()
+        return audit.main(args["only"])
     command, as_json = args.pop("command"), args.pop("json")
     out = {"search": tools.search_flights, "dates": tools.cheapest_dates, "airports": tools.find_airports}[command](**args)
     if as_json or "error" in out:

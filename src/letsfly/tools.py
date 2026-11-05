@@ -24,6 +24,8 @@ Day = Annotated[str, "Date YYYY-MM-DD"]
 Stops = Literal["ANY", "NON_STOP", "ONE_STOP", "TWO_PLUS_STOPS"]
 Currency = Annotated[str, "Currency of every price"]
 Link = Annotated[str, f"Short local link ({links.BASE}/<id>) that opens the real page"]
+# Extras next to what was asked: enough to show a cheaper partner without doubling the reply
+CODESHARE_ROWS = 3
 
 
 class Layover(TypedDict):
@@ -41,6 +43,7 @@ class Direction(TypedDict):
     hours: Annotated[float, "Total duration"]
     layovers: Annotated[list[Layover], "One per connection, in order"]
     operated_by: Annotated[dict[str, str] | None, "Flight to the company that flies it, when not the seller"]
+    sold_as: NotRequired[Annotated[dict[str, str], "In codeshares: flight to the number the airlines asked for sell it under"]]
 
 
 class Bags(TypedDict):
@@ -55,6 +58,7 @@ class Flight(TypedDict):
     out: Annotated[Direction, "Outbound"]
     back: NotRequired[Annotated[Direction, "Return, on a round trip"]]
     price_estimated: NotRequired[Annotated[bool, "The pair had no quote, so price is the outbound's"]]
+    price_other_seller: NotRequired[Annotated[bool, "Google gave no price for airlines: this is the flight's price without that filter, maybe another seller's"]]
     self_transfer: NotRequired[Annotated[bool, "Separate tickets: a missed connection is the traveller's problem"]]
     link: NotRequired[Annotated[str, "Short local link to this row's booking page on Google Flights"]]
 
@@ -68,7 +72,7 @@ PriceHistory = TypedDict("PriceHistory", {
 
 
 class PriceReference(TypedDict):
-    lowest: Annotated[float | None, "Lowest fare of the first page, before the airlines and departure_window filters; a round trip row can come below it"]
+    lowest: Annotated[float | None, "Lowest fare of the unfiltered first page, whatever airlines and the windows say; a round trip row can come below it"]
     typical: Annotated[float | None, "What Google considers a typical fare for this search"]
     low: Annotated[float | None, "Bottom of the typical range"]
     high: Annotated[float | None, "Top of the typical range"]
@@ -79,6 +83,8 @@ class FlightsResult(TypedDict):
     currency: Currency
     count: Annotated[int, "Rows in flights"]
     flights: Annotated[list[Flight], "The cheapest of each distinct outbound first, then the rest, cheapest first"]
+    codeshares: NotRequired[Annotated[list[dict], "Rows like those of flights and in their order, outside what airlines asked for: up to 3 with a partner's flight they also sell"]]
+    codeshares_total: NotRequired[Annotated[int, "How many such rows the search found, before keeping up to 3"]]
     note: NotRequired[Annotated[str, "Why some round trips are missing"]]
     price_reference: NotRequired[Annotated[PriceReference, "Google's reference; missing if it gives none"]]
 
@@ -168,10 +174,12 @@ def _route(legs):
     return "-".join(stops)
 
 
-def _direction(itinerary):
+def _direction(itinerary, shared_with=frozenset()):
     legs = itinerary.legs
     operated = {_flight(leg): leg.operator for leg in legs
                 if leg.operator and not leg.operator.lower().startswith(leg.airline_name.lower())}
+    sold_as = {_flight(leg): " ".join(leg.sold_as[code] for code in sorted(shared_with & leg.sold_as.keys()))
+               for leg in legs if leg.airline not in shared_with and shared_with & leg.sold_as.keys()}
     return {
         "route": _route(legs),
         "flights": " ".join(_flight(leg) for leg in legs),
@@ -181,7 +189,30 @@ def _direction(itinerary):
         "layovers": [{"airport": x.airport, "minutes": x.minutes} | ({"overnight": True} if x.overnight else {})
                      | ({"change_of_airport": True} if x.change_of_airport else {}) for x in itinerary.layovers],
         "operated_by": operated or None,
-    }
+    } | ({"sold_as": sold_as} if sold_as else {})
+
+
+def _flight_rows(trips, query, currency, limit, all_links, shared_with=frozenset()):
+    rows = []
+    for index, trip in enumerate(_varied(sorted(trips, key=lambda f: _priced(f).price or float("inf")))[:limit]):
+        outbound, back = trip if isinstance(trip, tuple) else (trip, None)
+        fare = _priced(trip)
+        names = [leg.airline_name for direction in (outbound, back) if direction for leg in direction.legs]
+        row = {"price": fare.price, "airlines": ", ".join(dict.fromkeys(names)),
+               "bags": {"carry_on": fare.carry_on, "checked": fare.checked}, "out": _direction(outbound, shared_with)}
+        if back and back.price is None and outbound.price is not None:
+            row["price_estimated"] = True
+        if fare.price_other_seller:
+            row["price_other_seller"] = True
+        if back:
+            row["back"] = _direction(back, shared_with)
+        if outbound.self_transfer or (back and back.self_transfer):
+            row["self_transfer"] = True
+        if all_links or index < 2:
+            row["link"] = links.short(booking_link([outbound, back] if back else [outbound], query.seat, query.adults,
+                                                   currency))
+        rows.append(row)
+    return rows
 
 
 @tool()
@@ -191,8 +222,9 @@ def search_flights(
     date: Day,
     return_date: Annotated[str | None, "Return date YYYY-MM-DD; without it, one way"] = None,
     max_stops: Stops = "ANY",
-    airlines: Annotated[list[str] | None, "Only these airlines, IATA codes (AR, DM)"] = None,
-    departure_window: Annotated[str | None, "Departure window in hours, for example 6-20"] = None,
+    airlines: Annotated[list[str] | None, "Only these airlines, IATA codes (AR, DM); partners' flights they also sell come apart in codeshares"] = None,
+    departure_window: Annotated[str | None, "Hours the outbound may leave, for example 6-20, up to 20:59; the return is not filtered"] = None,
+    return_window: Annotated[str | None, "Hours the return may leave, for example 18-23, up to 23:59; needs return_date"] = None,
     adults: Annotated[int, Range(1, 9)] = 1,
     cabin: Literal["ECONOMY", "PREMIUM_ECONOMY", "BUSINESS", "FIRST"] = "ECONOMY",
     currency: str = "USD",
@@ -201,32 +233,21 @@ def search_flights(
 ) -> FlightsResult:
     """Flights on one date, or round trips with return_date: the cheapest of each distinct outbound first, then the
     rest, cheapest first. price is for all adults; on a round trip, for the pair (price_estimated: the outbound's
-    price stands in). null bags: Google does not say. self_transfer: separate tickets. route AEP/EZE and
+    price stands in; price_other_seller: maybe not the airline's, say so). null bags: Google does not say. self_transfer: separate tickets. route AEP/EZE and
     change_of_airport: the next leg leaves from another airport. overnight: touches 00:00 to 05:00. operated_by: who
-    flies a leg when not the seller. price_reference, blind to airlines and departure_window: lowest (a pair can beat
-    it), typical, range low to high, in price's terms; history: weekly lowest since from, daily min and max."""
+    flies a leg when not the seller. Each window filters one direction. codeshares: up to 3 of codeshares_total rows with
+    a partner's flight the airlines also sell (number in sold_as), outside the request: always mention them, apart.
+    price_reference covers all airlines and hours, only max_stops and cabin narrow it: lowest (a pair can beat it),
+    typical, range low to high, in price's terms; history: weekly lowest since from, daily min and max."""
     query = params.flight_search(origin, destination, date, return_date, max_stops, airlines, departure_window,
-                                 adults, cabin, currency)
+                                 return_window, adults, cabin, currency)
     found, lost, reference = search.flights(query)
-
-    rows = []
-    for index, trip in enumerate(_varied(sorted(found, key=lambda f: _priced(f).price or float("inf")))[:limit]):
-        outbound, back = trip if isinstance(trip, tuple) else (trip, None)
-        fare = _priced(trip)
-        names = [leg.airline_name for direction in (outbound, back) if direction for leg in direction.legs]
-        row = {"price": fare.price, "airlines": ", ".join(dict.fromkeys(names)),
-               "bags": {"carry_on": fare.carry_on, "checked": fare.checked}, "out": _direction(outbound)}
-        if back and back.price is None and outbound.price is not None:
-            row["price_estimated"] = True
-        if back:
-            row["back"] = _direction(back)
-        if outbound.self_transfer or (back and back.self_transfer):
-            row["self_transfer"] = True
-        if all_links or index < 2:
-            row["link"] = links.short(booking_link([outbound, back] if back else [outbound], query.seat, query.adults,
-                                                   currency))
-        rows.append(row)
+    asked, shared = search.split(found, query.airlines)
+    rows = _flight_rows(asked, query, currency, limit, all_links)
     out = {"currency": currency, "count": len(rows), "flights": rows}
+    if shared:
+        out["codeshares"] = _flight_rows(shared, query, currency, min(limit, CODESHARE_ROWS), all_links, query.airlines)
+        out["codeshares_total"] = len(shared)
     if lost:
         out["note"] = f"The return page failed to load for {lost} of the outbounds, so their round trips are missing"
     if reference:

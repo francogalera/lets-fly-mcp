@@ -1,12 +1,14 @@
-"""Live data checks against Google through the proxy: pair prices, date sweeps and a burst of requests."""
+"""Live data checks against Google through the proxy: pair prices, date sweeps, a burst of requests and the filters."""
 import html
 import re
 import sys
 import threading
 import time
+from dataclasses import replace
 from datetime import date, timedelta
 
-from letsfly import client, tools
+from letsfly import client, page, search, tfs, tools
+from letsfly.models import Search
 
 ROUND_TRIPS = [("EZE", "MIA"), ("LGA", "MCO"), ("EZE", "SCL")]
 SWEEPS = [("EZE", "MIA", None), ("AEP", "BRC", None), ("EZE", "MIA", 10)]
@@ -76,13 +78,56 @@ def burst():
           f"{errors} errors, {missing} missing dates in {time.monotonic() - start:.0f} s")
 
 
+def filters_reach_google():
+    """Google honors each filter, read before search._keep, which would hide a field it stopped honoring. JFK-LAX has
+    flights from morning to night and several airlines, so the page without a filter nearly always shows rows outside."""
+    route, out, back = (["JFK"], ["LAX"]), day(45), day(55)
+    cases = (("departure_window", Search(*route, [out], window=(6, 12)), lambda i: 6 <= _hour(i) <= 12),
+             ("airlines", Search(*route, [out], airlines={"AA"}),
+              lambda i: any(leg.airline == "AA" or "AA" in leg.sold_as for leg in i.legs)),
+             ("return_window", Search(*route, [out, back], return_window=(18, 23)), lambda i: 18 <= _hour(i) <= 23))
+    for name, query, inside in cases:
+        try:
+            _honored(name, query, inside)
+        except client.SearchError as e:
+            check(name, False, f"{type(e).__name__}: {e}")
+
+
+def _honored(name, query, inside):
+    outbound = None
+    if len(query.dates) == 2:  # Google lists returns only once an outbound is pinned
+        priced = [i for i in _rows(_without_filters(query)) if i.price]
+        if not priced:
+            return check(name, False, "no outbound to pin on the page without filters")
+        outbound = min(priced, key=lambda i: i.price)
+    plain, rows = _rows(_without_filters(query), outbound), _rows(query, outbound)
+    outside_plain, outside = sum(not inside(i) for i in plain), sum(not inside(i) for i in rows)
+    detail = f"{outside_plain} of {len(plain)} rows outside without it, {outside} of {len(rows)} with it"
+    if plain and not outside_plain:
+        check(name, True, f"inconclusive: {detail}")
+    else:
+        check(name, plain and not outside and (rows or outside_plain == len(plain)), detail)
+
+
+def _rows(query, outbound=None):
+    return search._decode_all(page.fetch_ds1(tfs.search_page(query, query.dates, outbound)))
+
+
+def _without_filters(query):
+    return replace(query, airlines=set(), window=None, return_window=None)
+
+
+def _hour(itinerary):
+    return itinerary.legs[0].departs.hour
+
+
 def _clock(hour, minute, half):
     return f"{int(hour) % 12 + (12 if half == 'PM' else 0):02d}:{minute}"
 
 
-def main():
+def main(only=None):
     print(f"flights audit, {date.today()}")
-    for step in (pair_prices, dates_match_search, burst):
+    for step in (filters_reach_google,) if only == "filters" else (pair_prices, dates_match_search, burst, filters_reach_google):
         step()
     print("All good." if not failures else f"{len(failures)} checks failed.")
     sys.exit(1 if failures else 0)

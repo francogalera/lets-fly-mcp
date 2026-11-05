@@ -5,7 +5,7 @@ import typing
 import unittest
 from unittest import mock
 
-from fake_pages import days, page, reference
+from fake_pages import days, leg, page, reference, row
 from letsfly import client, errors, mcp, models, promos, tools
 from test_decode import BACK, GLUED, NIGHT, REGIONAL, TODAY
 from test_mcp import converse
@@ -125,6 +125,16 @@ class OutputSchema(unittest.TestCase):
             for tool in TOOLS:
                 with self.subTest(f"{tool} {error!r}"):
                     self.fits(tool, {"error": errors.payload(error)})
+
+    def test_codeshares_fit_even_with_flights_empty(self):
+        partner = row([leg("BA175", "LHR", "JFK", "2026-12-10 09:35", "2026-12-10 12:35", "British Airways",
+                           sold_as=("AA6936",))], 1010, 480)
+        client.fetch = lambda url: page([partner])
+        out = tools.search_flights("LHR", "JFK", "2026-12-10", airlines=["AA"])
+        self.assertEqual((out["flights"], out["codeshares"][0]["out"]["sold_as"]), ([], {"BA175": "AA6936"}))
+        self.fits("search_flights", out)
+        rows = self.schemas["search_flights"]["anyOf"][0]["properties"]["flights"]["items"]
+        self.assertEqual(mcp.problems(json.loads(json.dumps(out["codeshares"][0])), rows), [])
 
     def test_a_result_that_breaks_the_schema_is_caught(self):
         client.fetch = lambda url: page([REGIONAL])

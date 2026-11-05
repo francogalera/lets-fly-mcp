@@ -97,6 +97,63 @@ class Mcp:
         self.call("notifications/initialized", notify=True)
 
 
+def live_filters(mcp, schema):
+    """Filters against Google: the page without them leaves Copa out of EZE-MIA, so its rows prove the code got there."""
+    def search(**arguments):
+        res = mcp.call("tools/call", {"name": "search_flights", "arguments": arguments})["result"]
+        return res, res.get("structuredContent") or json.loads(res["content"][0]["text"])
+
+    def typical(data):
+        return data.get("price_reference", {}).get("typical")
+
+    def flies(rows, code):
+        return any(number.startswith(code) for r in rows for number in r["out"]["flights"].split())
+
+    _, plain = search(origin="EZE", destination="MIA", date=DATE, limit=20)
+    res, copa = search(origin="EZE", destination="MIA", date=DATE, airlines=["CM"])
+    rows = copa.get("flights", [])
+    check("MCP: airlines reach Google, with a carrier the page without them leaves out", flies(rows, "CM"),
+          problem(copa) if not rows else f"{len(rows)} flights" if not flies(plain.get("flights", []), "CM")
+          else "inconclusive: the page without airlines already has CM")
+    check("MCP: price_reference does not change with airlines", typical(copa) and typical(copa) == typical(plain),
+          f"typical {typical(plain)} and {typical(copa)}")
+    fits("search_flights with airlines", schema, res)
+
+    def hour(text):
+        return int(text[11:13])
+    res, timed = search(origin="JFK", destination="LAX", date=DATE, return_date=RETURN, departure_window="6-12",
+                        return_window="18-23", limit=20)
+    rows = timed.get("flights", [])
+    check("MCP: departure_window and return_window, each on its direction, with price_reference",
+          bool(rows) and typical(timed) and all(6 <= hour(r["out"]["depart"]) <= 12 and 18 <= hour(r["back"]["depart"]) <= 23
+                                                for r in rows), f"{len(rows)} options" if rows else problem(timed))
+    fits("search_flights with windows", schema, res)
+
+    res, american = search(origin="LHR", destination="JFK", date=DATE, airlines=["AA"])
+    shared = american.get("codeshares", [])
+    check("MCP: codeshares come apart, with the number of the airline asked for",
+          bool(shared) and all(any(n.startswith("AA") for n in [*r["out"]["flights"].split(), *r["out"].get("sold_as", {}).values()])
+                               for r in shared),
+          f"{len(american.get('flights', []))} flights and {len(shared)} of {american.get('codeshares_total')} codeshares"
+          if shared else problem(american))
+    fits("search_flights with codeshares", schema, res)
+    found = [m for r in shared for _, m in problems(r, schema["anyOf"][0]["properties"]["flights"]["items"])]
+    check("MCP: codeshares rows have the shape of flights rows", not found, "; ".join(found[:3]))
+
+
+def google_honors_filters():
+    """Runs inside the core because over the MCP search._keep hides a field Google stopped honoring."""
+    audit = subprocess.Popen([LAUNCHER, "audit", "filters"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    pids.append(audit.pid)
+    out, err = audit.communicate(timeout=180)
+    lines = [found for found in map(re.compile(r"  (ok  |FAIL) ([^:]+): (.*)").fullmatch, out.splitlines()) if found]
+    for found in lines:
+        check(f"Google honors {found[2]}", found[1] != "FAIL", found[3])
+    # A crash can come after some checks already printed ok
+    if not lines or (audit.returncode and not any(found[1] == "FAIL" for found in lines)):
+        check("Google honors the filters", False, (err or out).strip()[-200:])
+
+
 def probe_network(pid):
     nets = subprocess.run(["docker", "network", "ls", "-q", "--filter", f"label=flights.pid={pid}"],
                           capture_output=True, text=True).stdout.split()
@@ -137,6 +194,7 @@ def main():
     except ValueError:
         check("terminal search", False, (err or out).strip()[-200:])
     check("the terminal leaves no containers or networks", not leftovers(cli.pid))
+    google_honors_filters()
 
     mcp = Mcp()
     try:
@@ -158,6 +216,7 @@ def main():
               bool(rows) and page_ok(rows[0].get("link")), (rows[0].get("link") or "no link") if rows else "no results")
         check("MCP: short reply (under 4000 characters)", len(text) < 4000, f"{len(text)} characters")
         fits("search_flights", schemas.get("search_flights"), res)
+        live_filters(mcp, schemas.get("search_flights"))
         res = mcp.call("tools/call", {"name": "cheapest_dates", "arguments": {
             "origin": ROUTE[0], "destination": ROUTE[1], "start_date": DATE, "end_date": RANGE_END, "trip_days": 10}})["result"]
         data = res.get("structuredContent") or json.loads(res["content"][0]["text"])
