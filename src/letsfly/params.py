@@ -11,18 +11,22 @@ SEATS = {"ECONOMY": 1, "PREMIUM_ECONOMY": 2, "BUSINESS": 3, "FIRST": 4}
 MAX_PAST_FROM_DAYS = 6
 
 
-def flight_search(origin, destination, date, return_date, max_stops, airlines, window, adults, cabin, currency) -> Search:
+def flight_search(origin, destination, date, return_date, max_stops, airlines, window, return_window, adults, cabin,
+                  currency) -> Search:
     """The Search for search_flights; raises the first problem found, in the order of the parameters."""
     origins, destinations = airports.resolve(origin, "origin"), airports.resolve(destination, "destination")
     codes = airline_codes(airlines)
-    hours = departure_window(window)
+    hours, return_hours = departure_window(window), departure_window(return_window, "return_window")
     dates = [_segment_date(date, origins, destinations, "date")]
     if return_date:
         dates.append(_segment_date(return_date, destinations, origins, "return_date"))
         if dates[1] < dates[0]:
             raise ValidationError(f"The return date {dates[1]} comes before the departure date {dates[0]}",
                                   "return_date")
-    return Search(origins, destinations, dates, STOPS[max_stops], SEATS[cabin], adults, codes, hours, parse_currency(currency))
+    elif return_hours:
+        raise ValidationError("The return window needs a return date", "return_window")
+    return Search(origins, destinations, dates, STOPS[max_stops], SEATS[cabin], adults, codes, hours,
+                  parse_currency(currency), return_hours)
 
 
 def date_search(origin, destination, start_date, end_date, trip_days, adults, max_stops, currency):
@@ -55,7 +59,7 @@ def airline_codes(codes):
     return set(tokens)
 
 
-def departure_window(window):
+def departure_window(window, param="departure_window"):
     """(earliest, latest) departure hour from "6-20"; reversed hours are swapped."""
     if not window:
         return None
@@ -67,10 +71,9 @@ def departure_window(window):
         if not (0 <= earliest <= 23 and 0 <= latest <= 23):
             raise ValueError
     except ValueError:
-        raise ParseError(f"'{window}' is not a departure window: two hours from 0 to 23, as 6-20",
-                         "departure_window") from None
+        raise ParseError(f"'{window}' is not a window of hours: two hours from 0 to 23, as 6-20", param) from None
     if latest == 0:
-        raise ValidationError("The departure window has to end after hour 0", "departure_window")
+        raise ValidationError("The window has to end after hour 0", param)
     return min(earliest, latest), max(earliest, latest)
 
 

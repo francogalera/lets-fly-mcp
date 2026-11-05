@@ -5,13 +5,15 @@ import re
 from datetime import datetime
 
 
-def leg(flight, origin, destination, departs, arrives, name, operator=None):
-    """One leg: flight is the airline code and number (AA4357), times are local, YYYY-MM-DD HH:MM."""
+def leg(flight, origin, destination, departs, arrives, name, operator=None, sold_as=()):
+    """One leg: flight is the airline code and number (AA4357), times are local, YYYY-MM-DD HH:MM; sold_as holds the
+    flights of the other airlines that sell it."""
     up, down = datetime.fromisoformat(departs), datetime.fromisoformat(arrives)
     fl = [None] * 23
     fl[2], fl[3], fl[6] = operator, origin, destination
     fl[8], fl[10], fl[11] = [up.hour, up.minute], [down.hour, down.minute], 60
     fl[20], fl[21] = [up.year, up.month, up.day], [down.year, down.month, down.day]
+    fl[15] = [[other[:2], other[2:], None, other[:2]] for other in sold_as] or None
     fl[22] = [flight[:2], flight[2:], None, name]
     return fl
 
@@ -31,6 +33,42 @@ def reference(level, lowest, typical, low, high, points=None):
 def page(rows, price_reference=None):
     data = json.dumps([None, None, [rows], None] + ([None, price_reference] if price_reference else []))
     return f"<script>AF_initDataCallback({{key: 'ds:1', hash: '1', data:{data}, sideChannel: {{}}}});</script>"
+
+
+def directions(url):
+    """The fields of each direction inside a results URL, read from its tfs without letsfly: [{field: [values]}]."""
+    tfs = re.search(r"tfs=([^&]+)", url).group(1)
+    found = []
+    for field, value in _fields(base64.urlsafe_b64decode(tfs + "=" * (-len(tfs) % 4))):
+        if field == 3:
+            direction = {}
+            for inner, item in _fields(value):
+                direction.setdefault(inner, []).append(item)
+            found.append(direction)
+    return found
+
+
+def _fields(raw):
+    at = 0
+    while at < len(raw):
+        tag, at = _varint(raw, at)
+        if tag & 7 == 0:
+            value, at = _varint(raw, at)
+        else:
+            size, at = _varint(raw, at)
+            value, at = raw[at:at + size], at + size
+        yield tag >> 3, value
+
+
+def _varint(raw, at):
+    value = shift = 0
+    while True:
+        byte = raw[at]
+        at += 1
+        value |= (byte & 0x7F) << shift
+        shift += 7
+        if byte < 0x80:
+            return value, at
 
 
 def days(url):

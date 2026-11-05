@@ -33,14 +33,14 @@ usage: flights COMMAND [ARGS]
   search ORIGIN DESTINATION DATE [RETURN]      flights on one date, cheapest first
   dates ORIGIN DESTINATION START END [DAYS]    lowest price per departure date
   airports QUERY                               airports by code, city or name
-  audit                                        live data checks: pair prices, dates, a burst
+  audit [filters]                              live data checks: pair prices, dates, a burst, the filters
   mcp                                          the MCP server over stdio, for the flights agent
   links                                        the link server, which install.sh runs as a service
   update                                       pull this repo and reinstall: images, agent, skill, clients
   build                                        rebuild both images after changing src/ or docker/
   image                                        tag of the core image
   test                                         offline tests inside the image, and this script on bash 3.2
-  selftest                                     live check: searches, MCP, network blocking, cleanup
+  selftest                                     live check: searches, filters, MCP, network blocking, cleanup
 
 search, dates and airports take --json (the reply as the agent gets it); COMMAND --help shows the rest.
 USAGE

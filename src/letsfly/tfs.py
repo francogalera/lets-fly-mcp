@@ -26,11 +26,16 @@ def _bytes(field, payload):
     return _varint(field << 3 | 2) + _varint(len(payload)) + payload
 
 
-def _segment(origins, destinations, day, legs=(), max_stops=None):
-    """One direction of the trip: date, stop ceiling, pinned legs (as Leg) and the airports at each end."""
+def _segment(origins, destinations, day, legs=(), max_stops=None, airlines=(), window=None):
+    """One direction of the trip: date, stop ceiling, airlines, departure hours, pinned legs (as Leg) and the airports
+    at each end."""
     body = _bytes(2, day)
     if max_stops is not None:
         body += _number(5, max_stops)
+    for code in airlines:
+        body += _bytes(6, code)
+    if window:
+        body += _number(8, window[0]) + _number(9, window[1])
     for leg in legs:
         body += _bytes(4, _bytes(1, leg.origin) + _bytes(2, leg.departs.strftime("%Y-%m-%d")) + _bytes(3, leg.destination)
                        + _bytes(5, leg.airline) + _bytes(6, leg.flight_number))
@@ -54,12 +59,15 @@ def _envelope(segments, one_way, adults, seat, pin=False):
 
 def search_page(search, dates, outbound=None):
     """URL of the results page for search on dates; outbound pins the first direction to get its returns."""
-    directions = [(search.origins, search.destinations), (search.destinations, search.origins)]
+    directions = [(search.origins, search.destinations, search.window),
+                  (search.destinations, search.origins, search.return_window)]
     segments = b""
     for index, day in enumerate(dates):
+        origins, destinations, window = directions[index]
         legs = outbound.legs if outbound and index == 0 else ()
         # MaxStops.ANY is 0 and must leave the field out: 0 on the wire means non-stop
-        segments += _segment(*directions[index], day, legs, search.stops - 1 if search.stops else None)
+        segments += _segment(origins, destinations, day, legs, search.stops - 1 if search.stops else None,
+                             sorted(search.airlines), window)
     tfs = _envelope(segments, len(dates) == 1, search.adults, search.seat)
     return f"{PAGE}?tfs={tfs}&hl=en&gl=US" + (f"&curr={search.currency}" if search.currency else "")
 

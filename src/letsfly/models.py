@@ -29,6 +29,7 @@ class Leg:
     departs: datetime
     arrives: datetime
     operator: str | None
+    sold_as: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -48,6 +49,7 @@ class Itinerary:
     self_transfer: bool
     carry_on: int | None
     checked: int | None
+    price_other_seller: bool = False
 
 
 @dataclass
@@ -61,3 +63,4 @@ class Search:
     airlines: set[str] = field(default_factory=set)
     window: tuple[int, int] | None = None
     currency: str | None = None
+    return_window: tuple[int, int] | None = None

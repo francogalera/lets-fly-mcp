@@ -2,7 +2,7 @@
 import unittest
 from datetime import date
 
-from fake_pages import leg, page, reference, row
+from fake_pages import directions, leg, page, reference, row
 from letsfly import client, decode, models, tools
 
 TODAY = date(2026, 11, 1)
@@ -133,8 +133,8 @@ class ReferenceInResult(unittest.TestCase):
         client.fetch = lambda url: page([GLUED])
         self.assertNotIn("price_reference", tools.search_flights("EZE", "BOS", "2026-12-10"))
 
-    def test_it_stays_when_our_own_filters_leave_no_rows(self):
-        client.fetch = lambda url: page([GLUED], self.REFERENCE)
+    def test_it_stays_when_the_filters_leave_no_rows(self):
+        client.fetch = lambda url: page([]) if 6 in directions(url)[0] else page([GLUED], self.REFERENCE)
         out = tools.search_flights("EZE", "BOS", "2026-12-10", airlines=["AA"])
         self.assertEqual((out["count"], out["price_reference"]), (0, self.EXPECTED))
 

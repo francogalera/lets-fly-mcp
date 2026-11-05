@@ -30,8 +30,8 @@ def price_reference(data) -> dict | None:
     data[5] on the first page, in the page's currency, for all adults and on a round trip for the pair. Each amount
     comes as [null, n].
     [0] level, which the page words as 1 low, 2 to 4 typical, 5 high: below [4], inside [4] to [5], above [5].
-    [1] lowest fare of this page, before our own airlines and departure window filters. Follows max_stops. A round
-    trip pair is quoted on its return page and can come below it.
+    [1] lowest fare of this page. Follows max_stops. A round trip pair is quoted on its return page and can come below it.
+    With airlines in the tfs every amount describes those airlines, and an hour window or two airlines empty the block.
     [2] typical fare. [3] typical minus lowest, positive when cheap, rounded on its own: can differ by 1.
     [4] and [5] the typical range, low and high.
     [6] the cabin: 1 economy, 3 business, 4 first. Premium economy and some first class searches come without the block.
@@ -93,11 +93,22 @@ def _leg(fl) -> Leg:
         departs=_datetime(fl[20], fl[8]),
         arrives=_datetime(fl[21], fl[10]),
         operator=fl[2] if isinstance(fl[2], str) and fl[2] else None,
+        sold_as=_sold_as(_at(fl, 15)),
     )
     if not isinstance(airline, str) or not airline:
         raise ValueError(f"missing airline: {airline!r}")
     _check_positive(fl[11], "leg duration")
     return leg
+
+
+def _sold_as(entries):
+    """{code: flight} of the other airlines that sell this flight; a block that cannot be read never fails the row."""
+    found = {}
+    for entry in entries if isinstance(entries, list) else []:
+        code, number = _at(entry, 0), _at(entry, 1)
+        if isinstance(code, str) and code and isinstance(number, str) and number:
+            found[code] = f"{code}{number}"
+    return found
 
 
 def _price(row):

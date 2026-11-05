@@ -54,8 +54,8 @@ you allow and answers with the best options, their bags, layovers and links.
     flights mcp                          the MCP server over stdio
     flights links                        the link server, which install.sh runs as a service (see Links)
     flights test                         offline tests inside the image, and the launcher on bash 3.2
-    flights selftest                     live check: searches, MCP and its schemas, network blocking, cleanup
-    flights audit                        live data checks against Google: pair prices, dates, a burst
+    flights selftest                     live check: searches, filters, MCP and its schemas, network blocking, cleanup
+    flights audit [filters]              live data checks against Google: pair prices, dates, a burst, the filters
     flights update                       pull this repo and reinstall: images, agent, skill and clients
     flights build                        rebuild both images after changing src/ or docker/
     flights image                        tag of the core image, which follows the content of src/ and docker/
