@@ -1,0 +1,41 @@
+name: release
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: The version to release, as vX.Y.Z
+        required: true
+permissions:
+  contents: read
+env:
+  VERSION: ${{ inputs.version }}
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: main and a new version
+        run: |
+          [ "$GITHUB_REF" = refs/heads/main ] || { echo "run it from main, not $GITHUB_REF"; exit 1; }
+          [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "$VERSION is not vX.Y.Z"; exit 1; }
+          if git ls-remote --exit-code origin "refs/tags/$VERSION"; then echo "$VERSION already exists"; exit 1; fi
+      - run: bin/flights build
+      - run: bin/flights test
+      - name: flights selftest
+        run: |
+          bin/flights links &
+          bin/flights selftest
+  # Apart from check, which runs the repo's code and reaches the internet: only this job can write
+  publish:
+    needs: check
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - run: gh release create "$VERSION" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --generate-notes
+        env:
+          GH_TOKEN: ${{ github.token }}
