@@ -5,7 +5,7 @@ cheapest dates in a range, with short links to the booking pages. Over MCP, Clau
 ChatGPT Desktop also get the deals published on promociones-aereas.com.ar. On Linux and macOS. Secure by default: it
 runs sandboxed in Docker and reaches only the two sites it reads, with no API keys and no accounts.
 
-![The two ways to use it, then a search in the terminal and a question to the flights subagent](docs/demo.gif)
+![The two ways to use it, then a search in the terminal and a question to the flights subagent](https://github.com/user-attachments/assets/b45f5abd-4dca-4269-90bb-22a927404c6e)
 
 ## Install
 
