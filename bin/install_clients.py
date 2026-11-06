@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""Points the MCP clients found on this machine at bin/flights: Claude Desktop, Codex, and a plugin in the personal
-marketplace that ChatGPT Desktop installs. Then runs the link server as a service of the user. Run by install.sh;
-safe to run again. Python 3.9, as macOS ships it. Usage: install_clients.py REPO"""
+"""Sets up the version that current points at: the subagent and its skill for Claude Code, then the MCP clients found
+on this machine: Claude Desktop, Codex, and a plugin in the personal marketplace that ChatGPT Desktop installs. Then
+runs the link server as a service of the user. Run by release.py; safe to run again. Python 3.9, as macOS ships it.
+Usage: install_clients.py CURRENT"""
 import json
 import os
 import plistlib
@@ -10,7 +11,8 @@ import subprocess
 import sys
 import time
 
-REPO = os.path.realpath(sys.argv[1])
+# Not realpath: clients must keep current, and not the version it points at today, which a later update deletes
+REPO = os.path.abspath(sys.argv[1])
 FLIGHTS = os.path.join(REPO, "bin", "flights")
 HOME = os.path.expanduser("~")
 # Clients other than Claude Code start servers with a short environment, so the Docker endpoint goes with them
@@ -18,8 +20,9 @@ DOCKER = {k: os.environ[k] for k in ("DOCKER_HOST", "DOCKER_CONTEXT") if os.envi
 SERVER = {"command": FLIGHTS, "args": ["mcp"], **({"env": DOCKER} if DOCKER else {})}
 sys.path.insert(0, os.path.join(REPO, "src"))
 from letsfly.links import BASE, LABEL, UNIT  # noqa: E402  stdlib only, so it runs on the host
-# The service runs the installed command, which install.sh points at this checkout, not this checkout's path
+# The service runs the installed command, whatever it points at
 SERVE = [os.path.join(HOME, ".local", "bin", "flights"), "links"]
+KEEPS = "it keeps what it had until the next update"
 
 
 def write(path, text):
@@ -32,11 +35,24 @@ def write(path, text):
 def merge_json(path, update):
     """Applies update to the JSON at path, keeping everything else it holds."""
     data = {}
-    if os.path.exists(path):
-        with open(path, encoding="utf-8") as f:
-            data = json.load(f)
-    update(data)
+    try:
+        if os.path.exists(path):
+            with open(path, encoding="utf-8") as f:
+                data = json.load(f)
+        update(data)
+    # Also valid JSON of another shape, which only shows when update reaches into it
+    except (ValueError, AttributeError, TypeError) as e:
+        raise ValueError(f"{path}: {e}") from e
     write(path, json.dumps(data, indent=2, ensure_ascii=False) + "\n")
+
+
+def claude_code():
+    # Copies, not links: whatever backs up or syncs ~/.claude keeps the files and not links into a version
+    claude = os.path.join(HOME, ".claude")
+    shutil.copyfile(os.path.join(REPO, "agent", "flights.md"), _made(os.path.join(claude, "agents", "flights.md")))
+    shutil.copyfile(os.path.join(REPO, "skills", "broad-search", "SKILL.md"),
+                    _made(os.path.join(claude, "skills", "broad-search", "SKILL.md")))
+    return "Claude Code: subagent and skill copied"
 
 
 def claude_desktop():
@@ -52,7 +68,9 @@ def claude_desktop():
 def codex():
     if not shutil.which("codex"):
         return "Codex: not installed, skipped"
-    subprocess.run(["codex", "mcp", "add", "flights", "--", FLIGHTS, "mcp"], check=True, capture_output=True)
+    error = _run("codex", "mcp", "add", "flights", "--", FLIGHTS, "mcp")
+    if error:
+        return f"Codex: skipped, codex mcp add failed: {error}; {KEEPS}"
     # codex mcp add has no flag for env_vars, which passes variables through Codex's filtered environment
     path = os.path.join(os.environ.get("CODEX_HOME") or os.path.join(HOME, ".codex"), "config.toml")
     with open(path, encoding="utf-8") as f:
@@ -70,7 +88,9 @@ def skills(folder):
     """The agent prompt becomes the flights skill, so outside Claude Code it has one source too."""
     with open(os.path.join(REPO, "agent", "flights.md"), encoding="utf-8") as f:
         _, front, body = f.read().split("---\n", 2)
-    description = next(line for line in front.splitlines() if line.startswith("description: "))
+    description = next((line for line in front.splitlines() if line.startswith("description: ")), None)
+    if not description:
+        raise ValueError(f"{f.name}: no description line")
     write(os.path.join(folder, "flights", "SKILL.md"), f"---\nname: flights\n{description}\n---\n{body}")
     shutil.copyfile(os.path.join(REPO, "skills", "broad-search", "SKILL.md"),
                     _made(os.path.join(folder, "broad-search", "SKILL.md")))
@@ -140,6 +160,15 @@ def _made(path):
     return path
 
 
-if __name__ == "__main__":
+def main():
+    print(claude_code())
     for setup in (claude_desktop, codex, plugin, links):
-        print(setup())
+        try:
+            print(setup())
+        except (OSError, ValueError) as e:
+            # A client set up before follows current anyway. One set up by an older install keeps a clone's path
+            print(f"{setup.__name__}: skipped: {e}; {KEEPS}")
+
+
+if __name__ == "__main__":
+    main()

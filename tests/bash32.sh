@@ -45,4 +45,18 @@ logged "^-I /tmp/r/src/letsfly/links.py ensure\$" || fail "no ensure: $(cat /tmp
 # One folder for every checkout, which the one link server reads
 logged "^-I /tmp/r/src/letsfly/links.py record /tmp/.local/state/flights/links search-[0-9]*\$" ||
   fail "links recorded elsewhere: $(cat /tmp/python3.log)"
+# Installed, the launcher runs through current, and its own files must keep that path: an update moves it
+ln -s /tmp/r /tmp/current
+images=$(/tmp/current/bin/flights images) || fail "flights images"
+[ "$(echo "$images" | head -n 1)" = "$IMAGE" ] && echo "$images" | grep -q '^lets-fly-proxy:' ||
+  fail "images printed: $images"
+/tmp/current/bin/flights update --from . || fail "flights update"
+/tmp/current/bin/flights rollback || fail "flights rollback"
+logged "^-I /tmp/current/bin/release.py update --from \.\$" || fail "no update: $(cat /tmp/python3.log)"
+logged "^-I /tmp/current/bin/release.py rollback\$" || fail "no rollback: $(cat /tmp/python3.log)"
+# A version too damaged to hash can still be replaced or left
+mkdir -p /tmp/damaged/bin
+cp /tmp/r/bin/flights /tmp/damaged/bin/
+/tmp/damaged/bin/flights rollback || fail "flights rollback on a damaged version"
+logged "^-I /tmp/damaged/bin/release.py rollback\$" || fail "no rollback when damaged: $(cat /tmp/python3.log)"
 echo "bash 3.2: ok"
