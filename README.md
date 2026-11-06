@@ -17,9 +17,6 @@ It needs Docker and python3. Then search from any terminal:
     USD 831  American
       EZE-JFK  2026-12-10 20:40 > 2026-12-11 05:30  10.8 h  AA954
       http://127.0.0.1:18375/lmzcjcev
-    USD 837  American
-      EZE-MIA-JFK  2026-12-10 10:10 > 2026-12-10 22:59  14.8 h  AA982 AA1357  layovers: MIA 2h20
-      http://127.0.0.1:18375/zguyebih
 
 `flights dates` and `flights airports` work the same way, and `--json` prints what the agent gets.
 
@@ -89,14 +86,6 @@ so links in old answers keep working.
 
 On macOS, keep the repo outside `~/Documents`, `~/Desktop` and `~/Downloads`, which a launchd agent cannot read (not
 yet tried on a Mac).
-
-## Schemas
-
-Each tool publishes an `outputSchema` built from the `TypedDict` it returns, with a description per field, plus
-the error object every tool can return instead. Claude Code (checked on 2.1.316) shows the model only the tool's
-description and input schema, and let a result that broke its `outputSchema` through untouched. So each tool's
-docstring says what the agent needs to read the answer, and the schema is the contract for clients that do
-check results, as MCP asks them to: output objects accept extra fields, and the tests keep every output inside it.
 
 ## Tests
 
