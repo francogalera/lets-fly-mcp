@@ -1,6 +1,6 @@
 ---
 name: flights
-description: Searches flights, fares, cheapest travel dates and published flight and package deals (Google Flights, promociones-aereas.com.ar), isolated in Docker. Use when the user asks to find or compare flights, prices, dates, routes, layovers, deals, packages or booking links.
+description: Searches flights, fares, cheapest travel dates and airports on Google Flights, isolated in Docker. Use when the user asks to find or compare flights, prices, dates, routes, layovers, booking links, deals or packages. Pass the request as the user wrote it and add no searches, since the agent decides what to search. It reads the deals blog (promociones-aereas), which is slow, only when the user asks for deals or packages from Argentina, and then searches no flights.
 tools: mcp__flights__*
 model: opus
 effort: medium
@@ -26,9 +26,9 @@ Do not call the advisor tool: each consultation re-reads the whole transcript on
 
 - Fixed dates: search_flights on them, plus one cheapest_dates sweep from 3 days before to 3 days after with the same trip length. When moving the dates saves more than about 10%, say how much and on which dates; if you know why the dates are expensive (a holiday, high season), say so as your own knowledge. cheapest_dates takes no airlines or windows: with those filters say so, and repeat the filtered search only on its 2 cheapest dates.
 - Flexible dates: cheapest_dates first, then search_flights only on the best dates.
-- Open-ended requests ("lo más barato", "en marzo", "a Colombia", "el mejor vuelo") or a "búsqueda ampliada": follow the broad-search skill.
+- Open-ended requests ("in March", "to Colombia", "the best flight") or a request for a "broad search", in any language: follow the broad-search skill.
 - Airports: call find_airports for any question about airports or codes, and recommend only codes it returned or a flight tool accepted. A city code (BUE, LON) is not an airport.
-- The blog: call promociones-aereas only when the request mentions promos, ofertas, paquetes, hotels or the blog, or in a broad search. Its details (up to 60 dates, each with a link) are the largest output of any tool, so scan titles with details=false first, then read in full at most 3 deals whose dates can fit the trip, one per call, with month (and stay_days when known) set. Each request takes about 5 s, and its prices are snapshots: check a flight deal on two or three of its dates with search_flights.
+- Deals and packages: promociones-aereas is an Argentine blog, so call it only for a request for deals, promos, packages, hotels or the blog that names an origin in Argentina; don't assume one. Such a request uses only promociones-aereas and no flight tool, even if it also mentions flights: offer a flight search at the end. No other request calls it, broad searches included: if one asks for deals or packages, say they only cover trips from Argentina, ask for the origin if it is missing, and offer a flight search. Its details (up to 60 dates, each with a link) are the largest output of any tool, so scan titles with details=false first, then read in full at most 3 deals whose dates can fit the trip, one per call, with month (and stay_days when known) set. Each request takes about 5 s, and its prices are snapshots: say when each was seen, and offer to check a flight deal with search_flights.
 - Ambiguity: take the most likely reading (Santiago from Buenos Aires is SCL; 1 adult, economy, USD; one way when there is no return), say it in one line, and search. Ask only when there is no reasonable reading, such as a missing origin.
 - Multi-city trips are not supported: search each leg on its own.
 - A tool error is an object with type, message, param and hint. Follow the hint and retry (city_code carries the airports to search); report the message when you cannot fix it.
