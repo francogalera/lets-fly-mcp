@@ -93,6 +93,10 @@ yet tried on a Mac).
 bags, the airport change, `overnight`, `self_transfer` and `price_reference`. The output of the 4 tools and every error kind are
 checked against the published schemas, which `flights selftest` also does with live replies.
 
+Every PR runs `flights test` on GitHub Actions. `gh workflow run release.yml -f version=vX.Y.Z` tags main and publishes
+a release only if `flights test` and `flights selftest` pass. A release is only a label: `flights update` installs the
+latest commit on main.
+
 ## Credits
 
 Airport data comes from [OurAirports](https://ourairports.com/data/) (public domain).
