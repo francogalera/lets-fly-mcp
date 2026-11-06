@@ -14,9 +14,10 @@ INSTRUCTIONS = (
     "dates: cheapest_dates first, then search_flights on the best dates. An empty result means this search found "
     "nothing, not that no flight exists: try nearby dates or airports and say so. A tool error carries a hint: "
     "follow it and retry.\n"
-    "Use only airport codes find_airports returned or a flight tool accepted. promociones-aereas reads a deals blog "
-    "at about 5 s per request: list with details=false first, then read at most 3 deals. Answer in the language of "
-    "the request, best option first, with its price, bags, route, times and link."
+    "Use only airport codes find_airports returned or a flight tool accepted. Call promociones-aereas only when the "
+    "user asks for deals or packages and names an origin in Argentina, with no flight tool: it reads a blog at about "
+    "5 s per request, so list with details=false first, then read at most 3 deals. Answer in the language of the "
+    "request, best option first, with its price, bags, route, times and link."
 )
 
 Airports = Annotated[str, "IATA code, or several separated by commas (EZE,AEP)"]
@@ -138,7 +139,7 @@ class Details(TypedDict):
     notes: Annotated[list[str], "The post's opening paragraphs"]
     badges: NotRequired[Annotated[list[str], "Labels the blog puts on the post"]]
     featured: NotRequired[Annotated[list[Featured], "Hotels a package features"]]
-    other_occupancy: NotRequired[Annotated[dict[str, str], "Room occupancy (doble, triple) to the link of its dates"]]
+    other_occupancy: NotRequired[Annotated[dict[str, str], "Room occupancy, named as on the blog, to the link of its dates"]]
     fields: NotRequired[Annotated[dict[str, str], "The post's labelled facts: airline, baggage, payment terms"]]
     dates_total: NotRequired[Annotated[int, "How many dates the post had, when more than the 60 listed"]]
     dates: Annotated[list[DealDate], "Dates on sale, each with its own link and no price"]
@@ -148,7 +149,7 @@ class Deal(TypedDict):
     published: Annotated[str | None, "When the post went up, YYYY-MM-DD HH:MM Argentina time"]
     type: Annotated[Literal["package", "flight", "hotel", "car", "activity", "note"], "What the deal sells"]
     title: Annotated[str, "The post's title"]
-    price_from: Annotated[float | None, "The title's \"a partir de\": lowest price when the post was written"]
+    price_from: Annotated[float | None, "The title's starting price: the lowest when the post was written"]
     currency: Annotated[Literal["USD", "ARS"] | None, "Currency of price_from"]
     basis: NotRequired[Annotated[str, "What price_from covers: per person, per night"]]
     origin: NotRequired[Annotated[str, "Departure city the title names"]]
@@ -315,7 +316,7 @@ def find_airports(
 
 @tool("promociones-aereas")
 def promociones_aereas(
-    query: Annotated[str, "What to look for: destination, airline or origin (punta cana, paquetes brasil). Empty: the latest posts"] = "",
+    query: Annotated[str, "What to look for, in Spanish like the blog: destination, airline or origin (punta cana, paquetes brasil). Empty: the latest posts"] = "",
     type: Literal["any", "package", "flight", "hotel", "car", "activity"] = "any",
     page: Annotated[int, Range(1, 10), "Feed page, 15 posts per page, newest first"] = 1,
     limit: Annotated[int, Range(1, 15), "How many deals to return, each with its details (about 5 s per deal)"] = 5,
@@ -324,13 +325,14 @@ def promociones_aereas(
     month: Annotated[str | None, "Only departure dates in that month, YYYY-MM"] = None,
     stay_days: Annotated[int | None, Range(1, 60), "Only dates with that length of stay in days, ±1 (each date carries days to tell the exact ones)"] = None,
 ) -> DealsResult:
-    """Deals on promociones-aereas.com.ar (flights, packages, hotels), newest first, with details. price_from is the
-    title's "a partir de": the lowest price when the post was written (prices_seen_at), not per date; currency can
-    be ARS. details: the dates on sale, each with its own link and to (destination airport) when known, the post's
-    fields (airline, baggage, payment), featured hotels and notes, or an error object if the post was unreadable.
-    A package lists the dates of the room occupancy its price is based on, other_occupancy links the rest, and a
-    post with more than 60 dates gives dates_total. Dates carry no price: check a flight deal's dates with
-    search_flights."""
+    """Deals on promociones-aereas.com.ar, an Argentine blog (flights, packages, hotels), newest first, with details.
+    Call it only when the user asks for deals or packages and names an origin in Argentina: flight searches don't need
+    it. price_from is the title's starting price: the lowest when the post was written (prices_seen_at), not per date;
+    currency can be ARS. details: the dates on sale, each with its own link and to (destination airport) when known,
+    the post's fields (airline, baggage, payment), featured hotels and notes, or an error object if the post was
+    unreadable. A package lists the dates of the room occupancy its price is based on, other_occupancy links the rest,
+    and a post with more than 60 dates gives dates_total. Dates carry no price: check a flight deal with search_flights
+    only if the user asks."""
     return promos.search(query, type, page, limit, details, month, stay_days)
 
 
