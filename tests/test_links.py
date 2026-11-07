@@ -189,7 +189,7 @@ class Ensure(unittest.TestCase):
                 mock.patch.object(links.subprocess, "run", return_value=missing), \
                 contextlib.redirect_stderr(io.StringIO()) as stderr:
             links.ensure()
-        self.assertTrue(stderr.getvalue().endswith("Unit flights-links.service not found.; run install.sh\n"),
+        self.assertTrue(stderr.getvalue().endswith("Unit flights-links.service not found.; run flights update\n"),
                         stderr.getvalue())
 
     def test_systemctl_reaches_the_user_bus_from_a_short_environment(self):

@@ -181,7 +181,7 @@ def ensure(wait=2.0):
         r = subprocess.run(start, capture_output=True, text=True, timeout=10, env=env)
         why = (r.stderr.strip() or f"{start[0]} exited {r.returncode}") if r.returncode else ""
         if r.returncode == missing:
-            why += "; run install.sh"
+            why += "; run flights update"
     except (OSError, subprocess.TimeoutExpired) as e:
         why = str(e)
     # A start that returns 0 only means the process was launched, not that it serves

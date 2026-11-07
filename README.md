@@ -11,7 +11,7 @@ runs sandboxed in Docker and reaches only the two sites it reads, with no API ke
 
     git clone https://github.com/francogalera/lets-fly-mcp.git ~/lets-fly && ~/lets-fly/install.sh
 
-It needs Docker and python3. Then search from any terminal:
+It needs Docker, git, curl and python3. Then search from any terminal:
 
     $ flights search EZE JFK 2026-12-10
     USD 831  American
@@ -34,30 +34,30 @@ you allow and answers with the best options, their bags, layovers and links.
 
 ## Conventions
 
-- **Secure by default**: each run is a read-only, unprivileged container with nothing mounted that reaches only the
-  two sites it reads; every other attempt is blocked and logged. No API keys, no accounts.
+- **Secure by default**: each run is a read-only, unprivileged container with nothing mounted that reaches only the two sites it reads; every other attempt is blocked and logged. No API keys, no accounts.
 - **Developer happiness**: tools read like the question, answers need no docs.
 - **Convention over configuration**: no config files or env vars; defaults decide.
 - **One way to do it**: no abstractions just in case.
 - **Least surprise**: the price is what you pay, empty is not failed, unknown is `null`.
 - **Small, readable code**: plain functions and dataclasses, comments only for a non-obvious why.
-- **Sharp inside, strict at the edge**: inputs checked where they enter, outputs kept inside their schemas, polite
-  to the sources (10 req/s to Google, 5 s between blog requests).
+- **Sharp inside, strict at the edge**: inputs checked where they enter, outputs kept inside their schemas, polite to the sources (10 req/s to Google, 5 s between blog requests).
 - **Dependencies earn their place**: curl_cffi and what it needs, nothing else.
 
 ## Use
 
-    ./install.sh                         build the images, link flights, set up the clients and the link server
+    ./install.sh                         install this folder: images, command, clients and link server
     flights --help                       every command
     flights search EZE JFK 2026-12-10    also: dates, airports; --json prints what the agent gets
     flights mcp                          the MCP server over stdio
-    flights links                        the link server, which install.sh runs as a service (see Links)
-    flights test                         offline tests inside the image, and the launcher on bash 3.2
+    flights links                        the link server, which runs as a service of the user (see Links)
+    flights test                         offline tests inside the image, the launcher on bash 3.2, --from with git
     flights selftest                     live check: searches, filters, MCP and its schemas, network blocking, cleanup
     flights audit [filters]              live data checks against Google: pair prices, dates, a burst, the filters
-    flights update                       pull this repo and reinstall: images, agent, skill and clients
+    flights update [--from PATH]         install the latest version, or a checkout to try it (see Update)
+    flights rollback                     back to the previous version, without building
     flights build                        rebuild both images after changing src/ or docker/
     flights image                        tag of the core image, which follows the content of src/ and docker/
+    flights images                       tags of both images
 
 ## Isolation
 
@@ -68,11 +68,9 @@ client that kills `flights mcp` (Claude Code allows half a second) leaves no con
 
 ## Clients
 
-`install.sh` copies the subagent and the `broad-search` skill to `~/.claude` for Claude Code, adds `flights` to
-Claude Desktop and to Codex (`codex mcp add`, plus both skills in `~/.agents/skills`) when they are installed, and
-puts a plugin with the server and both skills in the personal marketplace (`~/.agents/plugins/marketplace.json`),
-from which ChatGPT Desktop installs it.
-Every client gets the server's `instructions`: the rules that matter most fit in their first 512 characters.
+Every install sets up Claude Code (the subagent and the `broad-search` skill in `~/.claude`), Claude Desktop and Codex
+when they are installed, and a plugin in the personal marketplace, from which ChatGPT Desktop installs it. A client that
+fails is skipped with a warning, and the next update tries again.
 
 ## Links
 
@@ -81,11 +79,16 @@ about 300 characters when it copied them. The id is the hash of the link, so it 
 
 The container still mounts nothing: it prints each link on stderr, and `bin/flights` keeps it in
 `~/.local/state/flights/links` when the id matches. `flights links` redirects each id, only on 127.0.0.1, as a user
-service that `install.sh` sets up (systemd on Linux, launchd on macOS). The port never changes and the files last,
-so links in old answers keep working.
+service that every install sets up and restarts (systemd on Linux, launchd on macOS). The port never changes and the
+files last, so links in old answers keep working.
 
-On macOS, keep the repo outside `~/Documents`, `~/Desktop` and `~/Downloads`, which a launchd agent cannot read (not
-yet tried on a Mac).
+## Update
+
+`flights update` installs the latest version in `~/.local/share/flights`, apart from your clone, which you can delete
+if no client failed. If the build fails, nothing changes. Only the current and the previous version stay.
+
+`flights rollback` goes back to the previous version without building. `flights update --from .` installs a checkout to
+try a branch: each try replaces the last one, and rollback returns to the version you were on before trying.
 
 ## Tests
 

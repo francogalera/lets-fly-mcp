@@ -12,6 +12,8 @@ while [ -L "$self" ]; do
   case "$link" in /*) self=$link ;; *) self=$(dirname "$self")/$link ;; esac
 done
 HERE="$(cd "$(dirname "$self")/.." && pwd)"
+# Before the tags: a version too damaged to hash can still be replaced or left
+case "${1:-}" in update | rollback) exec python3 -I "$HERE/bin/release.py" "$@" ;; esac
 if command -v sha256sum >/dev/null; then SHA=(sha256sum); else SHA=(shasum -a 256); fi
 # Tags follow the content: if something changed and was not rebuilt, startup says so
 IMAGE="lets-fly-core:$(cd "$HERE" && find src/letsfly docker -type f ! -path '*/__pycache__/*' -print0 | LC_ALL=C sort -z |
@@ -35,11 +37,13 @@ usage: flights COMMAND [ARGS]
   airports QUERY                               airports by code, city or name
   audit [filters]                              live data checks: pair prices, dates, a burst, the filters
   mcp                                          the MCP server over stdio, for the flights agent
-  links                                        the link server, which install.sh runs as a service
-  update                                       pull this repo and reinstall: images, agent, skill, clients
+  links                                        the link server, which runs as a service of the user
+  update [--from PATH]                         install the latest version, or a checkout to try it
+  rollback                                     back to the previous version, without building
   build                                        rebuild both images after changing src/ or docker/
   image                                        tag of the core image
-  test                                         offline tests inside the image, and this script on bash 3.2
+  images                                       tags of both images
+  test                                         offline tests in the image, this script on bash 3.2, --from with git
   selftest                                     live check: searches, filters, MCP, network blocking, cleanup
 
 search, dates and airports take --json (the reply as the agent gets it); COMMAND --help shows the rest.
@@ -136,10 +140,14 @@ case "${1:-}" in
   build) build; exit ;;
   links) exec python3 -I "$HERE/src/letsfly/links.py" serve "$LINKS" ;;
   image) echo "$IMAGE"; exit ;;
+  images) printf '%s\n' "$IMAGE" "$PROXY_IMAGE"; exit ;;
   selftest) exec python3 -I "$HERE/tests/selftest.py" "$HERE/bin/flights" ;;
-  test) shift; "$HERE/tests/bash32.sh" "$IMAGE" "$BASH32"; exec "$HERE/tests/run.sh" "$IMAGE" "$@" ;;
-  # exec, because the pull may rewrite this very script while bash is still reading it
-  update) exec sh -c 'git -C "$1" pull --ff-only && "$1/install.sh"' sh "$HERE" ;;
+  test)
+    shift
+    "$HERE/tests/bash32.sh" "$IMAGE" "$BASH32"
+    python3 -I "$HERE/tests/host_export.py" "$HERE/bin/release.py"
+    exec "$HERE/tests/run.sh" "$IMAGE" "$@"
+    ;;
   "" | -h | --help | help) usage; exit ;;
 esac
 
