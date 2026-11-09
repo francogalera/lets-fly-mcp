@@ -2,10 +2,11 @@
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
-from datetime import timedelta
+from datetime import datetime, timedelta
 
-from letsfly import decode, models, page, tfs
-from letsfly.client import SearchError, SearchUnreadable
+from letsfly import decode, models, page, params, tfs
+from letsfly.client import SearchError, SearchRejected, SearchUnreadable
+from letsfly.errors import FlightsError
 
 POOL = ThreadPoolExecutor(max_workers=10, thread_name_prefix="letsfly")
 TOP_N = 5
@@ -14,38 +15,127 @@ MAX_DATES = 93
 BLOCKED_PAGES_LIMIT = 5
 NO_PAYLOAD = "the results page had no ds:1 data: Google changed the page, or sent a consent or blocking page"
 CONSENT_HINT = ". From an EU/EEA IP Google may serve its consent page, which has no results"
+# The fields of a Search that filter Google's itineraries, with the tool parameter that sets each
+FILTERS = {"airlines": "airlines", "window": "departure_window", "return_window": "return_window", "stops": "max_stops"}
+CABINS = {seat: name for name, seat in params.SEATS.items()}
+
+
+class NoFlights(FlightsError):
+    kind = "no_flights"
+
+
+class NoReturnFlights(FlightsError):
+    kind = "no_return_flights"
+
+
+class NoRoundTripFare(FlightsError):
+    kind = "no_round_trip_fare"
+
+
+class FilteredOut(FlightsError):
+    kind = "filtered_out"
 
 
 def flights(search):
     """One way: itineraries, cheapest first. Round trip: (outbound, return) pairs for 5 outbounds, the cheapest,
-    with those the airlines asked for sell first.
+    with those the airlines asked for sell first. Without any, raises why: NoFlights, NoReturnFlights, NoRoundTripFare,
+    FilteredOut, or the error of a page that failed.
     Also returns how many of those outbounds lost their returns because the page failed to load, and Google's price
     reference, which only a first page carries: an unfiltered one, since airlines change it and a window empties it."""
     unfiltered = replace(search, airlines=set(), window=None, return_window=None)
     plain = POOL.submit(_page, unfiltered) if unfiltered != search else None
     try:
         data = _page(search)
-    except SearchUnreadable:
-        # A code Google does not know empties the page like a block does, but a block empties the unfiltered one too
+    except SearchRejected:
+        # Google refuses a code it does not know, while the page without airlines loads. A page that never loads says
+        # nothing about the codes, so it stays a page error
         if search.airlines and _loaded(plain) is not None:
             raise models.ValidationError("Google does not know at least one of these airline codes", "airlines",
                                          "Check the IATA codes and retry, or search without airlines") from None
         raise
     reference = decode.price_reference(_loaded(plain) if plain else data)
-    outbounds = _rows(data, search)
+    outbounds, pages = _rows(data, search), [data]
     if plain:
-        outbounds = _completed(outbounds, _loaded(plain), search)
-    if not outbounds or len(search.dates) == 1:
-        return outbounds or [], 0, reference
+        # Without rows of its own the search rests on the unfiltered page, so that page failing fails it
+        pages.append(_loaded(plain) if outbounds else plain.result())
+        outbounds = _completed(outbounds, pages[-1], search)
+    if not outbounds:
+        raise _nothing(search, pages)
+    if len(search.dates) == 1:
+        return outbounds, 0, reference
     # Google mixes both kinds by price, and a cheap codeshare must not take the place of a flight the airline sells
     picked = sorted(outbounds, key=lambda outbound: not _sold_by(outbound, search.airlines))[:TOP_N]
     expanded = list(POOL.map(lambda outbound: _returns(search, outbound), picked))
-    errors = [backs for _, backs in expanded if isinstance(backs, SearchError)]
-    if len(errors) == len(expanded):
-        raise errors[0]
-    pairs = [(outbound, back) for outbound, backs in expanded if not isinstance(backs, SearchError)
+    errors = [backs for _, backs, _ in expanded if isinstance(backs, SearchError)]
+    pairs = [(outbound, back) for outbound, backs, _ in expanded if not isinstance(backs, SearchError)
              for back in backs or []]
+    if not pairs:
+        # A failed page may have held the returns, so only pages that loaded can say there are none
+        if errors:
+            raise errors[0]
+        exist = any(exist for _, _, exist in expanded)
+        raise exist and _filtered_out(search, ("airlines", "return_window", "stops")) or _no_return(search)
     return pairs, len(errors), reference
+
+
+def _nothing(search, pages):
+    """Why the first page left no outbound. Google reports whether it has itineraries before its filters; on a round
+    trip without any, one page per direction tells no flights, no return and no round trip fare apart."""
+    if any(decode.itineraries_exist(data) for data in pages) and (error := _filtered_out(search, FILTERS)):
+        return error
+    if len(search.dates) == 1:
+        return _no_flights(search)
+    back = replace(search, origins=search.destinations, destinations=search.origins, dates=search.dates[1:],
+                   window=search.return_window, return_window=None)
+    out, back = POOL.map(_page, (replace(search, dates=search.dates[:1], return_window=None), back))
+    if not decode.itineraries_exist(out):
+        return _no_flights(search)
+    if not decode.itineraries_exist(back):
+        return _no_return(search)
+    same_day = ". On the same day the return may leave before the outbound lands" if len(set(search.dates)) == 1 else ""
+    return NoRoundTripFare(f"Each direction has flights, but Google offers no round trip fare for {search.dates[0]} "
+                           f"and {search.dates[1]}", None, "Search each direction as a one way with search_flights; "
+                           f"the two are separate tickets{same_day}")
+
+
+def _filtered_out(search, fields):
+    """FilteredOut naming the filters set among fields, or None when none is set."""
+    names = [FILTERS[field] for field in fields if getattr(search, field)]
+    if not names:
+        return None
+    return FilteredOut(f"Google has flights for this search, but none match {', '.join(names)}",
+                       names[0] if len(names) == 1 else None,
+                       f"Widen or drop {' or '.join(names)} and search again, and say which one left nothing")
+
+
+def _no_flights(search):
+    day = search.dates[0]
+    hint = "Try nearby dates with cheapest_dates, or nearby airports" + _also(search)
+    if models.today() > datetime.strptime(day, "%Y-%m-%d").date():
+        hint += ". The date may already be over at the origin"
+    return NoFlights(f"Google has no flights from {_codes(search.origins)} to {_codes(search.destinations)} on "
+                     f"{day}{_for(search)}", "date", hint)
+
+
+def _no_return(search):
+    return NoReturnFlights(f"Google has flights out on {search.dates[0]}, but none back from "
+                           f"{_codes(search.destinations)} to {_codes(search.origins)} on {search.dates[1]}"
+                           f"{_for(search)}", "return_date",
+                           "Try another return_date, or nearby airports for the return" + _also(search))
+
+
+def _for(search):
+    return (f" in {CABINS[search.seat]}" if search.seat != 1 else "") + (
+        f" for {search.adults} adults" if search.adults > 1 else "")
+
+
+def _also(search):
+    return (", or another cabin" if search.seat != 1 else "") + (
+        ", or fewer adults: the seats may be sold out" if search.adults > 1 else "")
+
+
+def _codes(airports):
+    return ",".join(airports)
 
 
 def _completed(rows, plain, search):
@@ -93,10 +183,12 @@ def _loaded(future):
 
 
 def _returns(search, outbound):
+    """(outbound, its returns or the error that kept them, whether Google has returns before its filters)."""
     try:
-        return outbound, _rows(_page(search, outbound), replace(search, window=search.return_window))
+        data = _page(search, outbound)
+        return outbound, _rows(data, replace(search, window=search.return_window)), decode.itineraries_exist(data)
     except SearchError as e:
-        return outbound, e
+        return outbound, e, False
 
 
 def _page(search, outbound=None):
@@ -115,7 +207,7 @@ def _rows(data, search):
     for row in rows:
         try:
             found.append(decode.itinerary(row))
-        except (AttributeError, KeyError, ValueError, TypeError) as e:
+        except (AttributeError, IndexError, KeyError, TypeError, ValueError) as e:
             if (reason := f"{type(e).__name__}: {e}") not in reasons and len(reasons) < 3:
                 reasons.append(reason)
     if rows and not found:
@@ -141,6 +233,8 @@ class _Day:
     attempted: bool = True
     failure: str | None = None
     price: tuple | None = None
+    # Its page never loaded: no ds:1, or Google's own error on every try
+    blocked: bool = False
 
 
 @dataclass
@@ -164,7 +258,7 @@ def dates(search, days, trip_days=None):
 
 def _price_day(search, day, trip_days, health):
     travel = [day] + ([day + timedelta(days=trip_days)] if trip_days else [])
-    if day < models.today() - timedelta(days=1):
+    if day < models.earliest_day():
         return _Day(day.isoformat(), attempted=False)
     with health.lock:
         if not health.loaded and health.blocked >= BLOCKED_PAGES_LIMIT:
@@ -172,11 +266,17 @@ def _price_day(search, day, trip_days, health):
             return _Day(day.isoformat(), attempted=False, failure="skipped after repeated blocked pages")
     url = tfs.search_page(search, [d.strftime("%Y-%m-%d") for d in travel])
     try:
-        data = page.fetch_ds1(url)
+        try:
+            data = page.fetch_ds1(url)
+        except SearchUnreadable as e:
+            # Google's own error on every try blocks a sweep as much as a page without ds:1
+            with health.lock:
+                health.blocked += 1
+            return _Day(day.isoformat(), failure=f"{type(e).__name__}: {e}", blocked=True)
         if data is None:
             with health.lock:
                 health.blocked += 1
-            return _Day(day.isoformat(), failure=NO_PAYLOAD)
+            return _Day(day.isoformat(), failure=NO_PAYLOAD, blocked=True)
         with health.lock:
             health.loaded = True
         prices = [itinerary.price for itinerary in _decode_all(data) if _keep(itinerary, search) and itinerary.price]
@@ -212,7 +312,7 @@ def _collect(outcomes, total, skipped):
     reasons = list(dict.fromkeys(day.failure for day in failed))[:3]
     tripped = skipped > 0
     everything_failed = bool(attempted) and len(failed) == len(attempted)
-    blocked = bool(failed) and all(day.failure == NO_PAYLOAD for day in failed)
+    blocked = bool(failed) and all(day.blocked for day in failed)
     error = SearchUnreadable if blocked or tripped else SearchError
     why = "; ".join(reasons)
     if not results and (everything_failed or tripped):
@@ -223,7 +323,9 @@ def _collect(outcomes, total, skipped):
         if tripped:
             message += (f". Stopped after {len(attempted)} of {total} dates, {skipped} skipped: when no page at all "
                         "loads, every date fails the same way and each one costs several requests")
-        raise error(message + (CONSENT_HINT if blocked or tripped else ""))
+        # The consent page is one of the pages without ds:1, so the hint needs some of those
+        no_payload = any(day.failure == NO_PAYLOAD for day in failed)
+        raise error(message + (CONSENT_HINT if (blocked or tripped) and no_payload else ""))
     if not results and failed and len(failed) >= loaded:
         raise (SearchUnreadable if blocked else SearchError)(
             f"No price for any of the {total} dates, and {len(failed)} of the {len(attempted)} tried did not load: "

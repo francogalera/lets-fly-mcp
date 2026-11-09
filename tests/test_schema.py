@@ -7,7 +7,7 @@ from unittest import mock
 
 from fake_pages import days, leg, page, reference, row
 from letsfly import client, errors, mcp, models, promos, tools
-from test_decode import BACK, GLUED, NIGHT, REGIONAL, TODAY
+from test_decode import BACK, GLUED, NIGHT, NOW, REGIONAL
 from test_mcp import converse
 
 TOOLS = ("search_flights", "cheapest_dates", "find_airports", "promociones-aereas")
@@ -51,11 +51,11 @@ class OutputSchema(unittest.TestCase):
         cls.schemas = {t["name"]: t["outputSchema"] for t in listed if t["name"] in TOOLS}
 
     def setUp(self):
-        self.real = client.fetch, client.sleep, models.today
-        client.sleep, models.today = lambda seconds: None, lambda: TODAY
+        self.real = client.fetch, client.sleep, models.now
+        client.sleep, models.now = lambda seconds: None, lambda: NOW
 
     def tearDown(self):
-        client.fetch, client.sleep, models.today = self.real
+        client.fetch, client.sleep, models.now = self.real
 
     def fits(self, tool, out):
         self.assertEqual(mcp.problems(json.loads(json.dumps(out)), self.schemas[tool]), [])

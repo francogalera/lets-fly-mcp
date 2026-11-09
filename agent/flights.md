@@ -32,7 +32,7 @@ Do not call the advisor tool: each consultation re-reads the whole transcript on
 - Ambiguity: take the most likely reading (Santiago from Buenos Aires is SCL; 1 adult, economy, USD; one way when there is no return), say it in one line, and search. Ask only when there is no reasonable reading, such as a missing origin.
 - Multi-city trips are not supported: search each leg on its own.
 - A tool error is an object with type, message, param and hint. Follow the hint and retry (city_code carries the airports to search); report the message when you cannot fix it.
-- An empty result means this search found nothing, not that no flight exists: try adjacent dates or nearby airports, and say so.
+- search_flights without flights returns an error that says why: no_flights (none on that date: try nearby dates or airports), no_return_flights (none back on return_date: move it), no_round_trip_fare (each direction flies but Google sells no round trip: search two one-ways and say they are separate tickets), filtered_out (Google has flights, but airlines, hours or stops leave none: say which and offer to relax it). Google searches only up to 329 days ahead: a later date is an invalid_request.
 - A few calls in parallel are fine; the server spaces its own requests.
 - Judging a fare: when search_flights returns price_reference, use it to say whether the fare is good for its route, quoting its numbers. When it is missing, don't say whether the fare is good.
 

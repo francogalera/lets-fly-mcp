@@ -90,7 +90,7 @@ class Instructions(unittest.TestCase):
     def test_the_core_fits_in_512_characters_and_the_whole_under_1000_bytes(self):
         core = tools.INSTRUCTIONS[:512]
         for rule in ("Never state a price", "exactly as returned", "Fixed dates: search_flights",
-                     "Flexible dates: cheapest_dates first", "An empty result"):
+                     "Flexible dates: cheapest_dates first", "No flights is an error"):
             self.assertIn(rule, core)
         self.assertLess(len(tools.INSTRUCTIONS.encode()), 1000)
 

@@ -7,12 +7,14 @@ import time
 from dataclasses import replace
 from datetime import date, timedelta
 
-from letsfly import client, page, search, tfs, tools
+from letsfly import client, models, page, search, tfs, tools
 from letsfly.models import Search
 
 ROUND_TRIPS = [("EZE", "MIA"), ("LGA", "MCO"), ("EZE", "SCL")]
 SWEEPS = [("EZE", "MIA", None), ("AEP", "BRC", None), ("EZE", "MIA", 10)]
 BURST = [("EZE", "MAD"), ("COR", "GRU"), ("EZE", "CUN"), ("EZE", "LIM"), ("MDZ", "SCL")]
+NO_RESULTS = {error.kind for error in (search.NoFlights, search.NoReturnFlights, search.NoRoundTripFare,
+                                       search.FilteredOut)}
 QUOTE = re.compile(r"From ([\d,]+) US dollars round trip total\..*?Leaves .+? at (\d+):(\d+)\W*([AP]M) on .+? "
                    r"arrives at .+? at (\d+):(\d+)\W*([AP]M)")
 failures = []
@@ -25,7 +27,8 @@ def check(name, ok, detail):
 
 
 def day(offset):
-    return (date.today() + timedelta(days=offset)).isoformat()
+    """A date offset days from today, on the clock the tools validate against."""
+    return (models.today() + timedelta(days=offset)).isoformat()
 
 
 def pair_prices():
@@ -59,7 +62,7 @@ def dates_match_search():
     for origin, destination, trip in SWEEPS:
         rows = tools.cheapest_dates(origin, destination, day(60), day(66), trip_days=trip, limit=60).get("dates", [])
         for row in rows[:2]:
-            best = tools.search_flights(origin, destination, row["date"], row.get("return"), limit=1)["flights"]
+            best = tools.search_flights(origin, destination, row["date"], row.get("return"), limit=1).get("flights", [])
             total += 1
             agree += bool(best) and best[0]["price"] == row["price"]
     check("cheapest_dates equals the cheapest search_flights row", total and agree == total, f"{agree}/{total}")
@@ -73,7 +76,9 @@ def burst():
         errors += "error" in out
         missing += len(out.get("missing_dates", []))
     for origin, destination in BURST:
-        errors += "error" in tools.search_flights(origin, destination, day(75), day(89), limit=5)
+        out = tools.search_flights(origin, destination, day(75), day(89), limit=5)
+        # A search without flights loaded fine: only a page that failed counts against the burst
+        errors += "error" in out and out["error"]["type"] not in NO_RESULTS
     check("burst of 3 sweeps and 5 round trips", not errors and not missing,
           f"{errors} errors, {missing} missing dates in {time.monotonic() - start:.0f} s")
 

@@ -6,8 +6,8 @@ from letsfly.models import Itinerary, Layover, Leg
 NIGHT_ENDS = time(5)
 WEEK = 7
 TO_ORIGIN_DAY = timedelta(hours=13)
-# A malformed row raises, and plain indexing raises on purpose: the exception type decides whether the row is
-# skipped or the whole search fails (an IndexError only gets past the flight search, not the date sweep)
+# A malformed row raises, and plain indexing raises on purpose: both searches skip that row and keep the others, and
+# the flight search fails only when no row of the page can be read
 
 
 def itinerary(row) -> Itinerary:
@@ -22,6 +22,15 @@ def itinerary(row) -> Itinerary:
                         _overnight(a.arrives, b.departs), a.destination != b.origin) for a, b in zip(legs, legs[1:])]
     checked, carry_on = _bags(row)
     return Itinerary(legs, price, minutes, layovers, _at(detail, 12) is True, carry_on, checked)
+
+
+def itineraries_exist(data) -> bool:
+    """Whether Google has itineraries for the search before its filters (airlines, stops, hours) remove them: rows on
+    the page, or data[7][0], the price range of all its results as [[null, lowest], [null, highest]]. That range comes
+    null only when Google has nothing at all, whatever the filters."""
+    rows = any(isinstance(block := _at(data, index), list) and isinstance(_at(block, 0), list) and block[0]
+               for index in (2, 3))
+    return rows or _at(_at(data, 7), 0) is not None
 
 
 def price_reference(data) -> dict | None:

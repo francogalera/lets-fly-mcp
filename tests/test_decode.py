@@ -1,11 +1,13 @@
 """The decode on ds:1 rows written by hand: what each row carries comes out of search_flights as is."""
 import unittest
-from datetime import date
+from datetime import datetime, timezone
 
 from fake_pages import directions, leg, page, reference, row
 from letsfly import client, decode, models, tools
 
-TODAY = date(2026, 11, 1)
+# The tests' clock
+NOW = datetime(2026, 11, 1, 6, tzinfo=timezone.utc)
+TODAY = NOW.date()
 REGIONAL = row([leg("AA900", "EZE", "JFK", "2026-12-10 22:00", "2026-12-11 06:30", "American"),
                 leg("AA4357", "JFK", "BOS", "2026-12-11 08:15", "2026-12-11 09:40", "American",
                     "Republic Airways as American Eagle")], 980, 820, carry_on=1, checked=0)
@@ -24,11 +26,11 @@ AUCKLAND_SUMMER_SEP_4 = 1_788_433_200_000  # Midnight at UTC+13, 11:00 UTC the d
 
 class Decode(unittest.TestCase):
     def setUp(self):
-        self.real = client.fetch, models.today
-        models.today = lambda: TODAY
+        self.real = client.fetch, models.now
+        models.now = lambda: NOW
 
     def tearDown(self):
-        client.fetch, models.today = self.real
+        client.fetch, models.now = self.real
 
     def test_each_row_keeps_its_price_operator_bags_and_layovers(self):
         client.fetch = lambda url: page([REGIONAL, NIGHT, GLUED])
@@ -112,11 +114,11 @@ class ReferenceInResult(unittest.TestCase):
                 "history": {"from": "2026-09-04", "weekly": [700], "min": 700, "max": 700}}
 
     def setUp(self):
-        self.real = client.fetch, models.today
-        models.today = lambda: TODAY
+        self.real = client.fetch, models.now
+        models.now = lambda: NOW
 
     def tearDown(self):
-        client.fetch, models.today = self.real
+        client.fetch, models.now = self.real
 
     def test_one_way(self):
         client.fetch = lambda url: page([GLUED], self.REFERENCE)
@@ -132,11 +134,6 @@ class ReferenceInResult(unittest.TestCase):
     def test_the_field_is_missing_when_google_does_not_give_it(self):
         client.fetch = lambda url: page([GLUED])
         self.assertNotIn("price_reference", tools.search_flights("EZE", "BOS", "2026-12-10"))
-
-    def test_it_stays_when_the_filters_leave_no_rows(self):
-        client.fetch = lambda url: page([]) if 6 in directions(url)[0] else page([GLUED], self.REFERENCE)
-        out = tools.search_flights("EZE", "BOS", "2026-12-10", airlines=["AA"])
-        self.assertEqual((out["count"], out["price_reference"]), (0, self.EXPECTED))
 
 
 if __name__ == "__main__":

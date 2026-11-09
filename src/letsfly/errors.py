@@ -6,7 +6,8 @@ from typing import Annotated, Literal, NotRequired, TypedDict
 
 Kind = Literal["internal", "invalid_arguments", "unknown_tool", "unknown_airport", "city_code", "invalid_input",
                "invalid_request", "google", "google_timeout", "google_connection", "google_certificate", "google_http",
-               "google_page", "blog_unavailable", "blog_forbidden", "blog_unreadable"]
+               "google_page", "google_rejected", "no_flights", "no_return_flights", "no_round_trip_fare", "filtered_out",
+               "blog_unavailable", "blog_forbidden", "blog_unreadable"]
 
 
 class Error(TypedDict):
