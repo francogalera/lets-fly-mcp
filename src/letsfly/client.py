@@ -42,6 +42,11 @@ class SearchUnreadable(SearchError):
     kind = "google_page"
 
 
+class SearchRejected(SearchError):
+    """Google answered and refused the request as invalid, so the same request gets the same answer."""
+    kind = "google_rejected"
+
+
 def fetch(url: str) -> str:
     """GET a Google Flights page and return its HTML; retries twice, waiting 1 s and then 2 s."""
     for attempt in range(ATTEMPTS):

@@ -11,9 +11,8 @@ from letsfly.tfs import booking_link
 INSTRUCTIONS = (
     "Never state a price, time, airline or link that is not in a tool result of this session. Copy each link "
     "exactly as returned: never build, edit, shorten or join links. Fixed dates: search_flights on them. Flexible "
-    "dates: cheapest_dates first, then search_flights on the best dates. An empty result means this search found "
-    "nothing, not that no flight exists: try nearby dates or airports and say so. A tool error carries a hint: "
-    "follow it and retry.\n"
+    "dates: cheapest_dates first, then search_flights on the best dates. No flights is an error that says why. A "
+    "tool error carries a hint: follow it and retry.\n"
     "Use only airport codes find_airports returned or a flight tool accepted. Call promociones-aereas only when the "
     "user asks for deals or packages and names an origin in Argentina, with no flight tool: it reads a blog at about "
     "5 s per request, so list with details=false first, then read at most 3 deals. Answer in the language of the "
@@ -21,7 +20,7 @@ INSTRUCTIONS = (
 )
 
 Airports = Annotated[str, "IATA code, or several separated by commas (EZE,AEP)"]
-Day = Annotated[str, "Date YYYY-MM-DD"]
+Day = Annotated[str, "Date YYYY-MM-DD, up to 329 days ahead"]
 Stops = Literal["ANY", "NON_STOP", "ONE_STOP", "TWO_PLUS_STOPS"]
 Currency = Annotated[str, "Currency of every price"]
 Link = Annotated[str, f"Short local link ({links.BASE}/<id>) that opens the real page"]
@@ -233,13 +232,14 @@ def search_flights(
     all_links: Annotated[bool, "Booking link on every row; by default only the first 2 rows carry one"] = False,
 ) -> FlightsResult:
     """Flights on one date, or round trips with return_date: the cheapest of each distinct outbound first, then the
-    rest, cheapest first. price is for all adults; on a round trip, for the pair (price_estimated: the outbound's
+    rest by price. price is for all adults; on a round trip, for the pair (price_estimated: the outbound's
     price stands in; price_other_seller: maybe not the airline's, say so). null bags: Google does not say. self_transfer: separate tickets. route AEP/EZE and
     change_of_airport: the next leg leaves from another airport. overnight: touches 00:00 to 05:00. operated_by: who
-    flies a leg when not the seller. Each window filters one direction. codeshares: up to 3 of codeshares_total rows with
+    flies a leg when not the seller. codeshares: up to 3 of codeshares_total rows with
     a partner's flight the airlines also sell (number in sold_as), outside the request: always mention them, apart.
     price_reference covers all airlines and hours, only max_stops and cabin narrow it: lowest (a pair can beat it),
-    typical, range low to high, in price's terms; history: weekly lowest since from, daily min and max."""
+    typical, range low to high, in price's terms; history: weekly lowest since from, daily min and max. No flights: an
+    error typed no_flights, no_return_flights, no_round_trip_fare or filtered_out; follow its hint."""
     query = params.flight_search(origin, destination, date, return_date, max_stops, airlines, departure_window,
                                  return_window, adults, cabin, currency)
     found, lost, reference = search.flights(query)

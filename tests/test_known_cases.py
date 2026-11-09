@@ -2,21 +2,20 @@
 import contextlib
 import io
 import unittest
-from datetime import date, datetime
+from datetime import datetime
 
 from letsfly import airports, client, decode, models, tools
-
 # Searches use fixed dates, so the clock stays where they are still in the future
-TODAY = date(2026, 11, 1)
+from test_decode import NOW
 
 
 class KnownCases(unittest.TestCase):
     def setUp(self):
-        self.real = client.fetch, client.sleep, models.today
-        client.sleep, models.today = lambda seconds: None, lambda: TODAY
+        self.real = client.fetch, client.sleep, models.now
+        client.sleep, models.now = lambda seconds: None, lambda: NOW
 
     def tearDown(self):
-        client.fetch, client.sleep, models.today = self.real
+        client.fetch, client.sleep, models.now = self.real
 
     def test_airports_by_city(self):
         self.assertEqual(tools.find_airports("Cartagena")["airports"][0]["code"], "CTG")

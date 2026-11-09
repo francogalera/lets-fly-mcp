@@ -4,21 +4,21 @@ import io
 import threading
 import unittest
 
-from fake_pages import directions, leg, page, reference, row
+from fake_pages import directions, leg, page, reference, rejected, row
 from letsfly import audit, client, decode, models, tfs, tools
 from letsfly.models import Search
-from test_decode import BACK, GLUED, NIGHT, REGIONAL, TODAY
+from test_decode import BACK, GLUED, NIGHT, NOW, REGIONAL
 
 OUT, RETURN = "2026-12-10", "2026-12-20"
 
 
 class Pages(unittest.TestCase):
     def setUp(self):
-        self.real = client.fetch, client.sleep, models.today
-        client.sleep, models.today = lambda seconds: None, lambda: TODAY
+        self.real = client.fetch, client.sleep, models.now
+        client.sleep, models.now = lambda seconds: None, lambda: NOW
 
     def tearDown(self):
-        client.fetch, client.sleep, models.today = self.real
+        client.fetch, client.sleep, models.now = self.real
 
 
 class FiltersInTheUrl(unittest.TestCase):
@@ -76,7 +76,7 @@ class ReturnWindowParam(Pages):
             return page([])
         client.fetch = fetch
         tools.search_flights("EZE", "MIA", OUT, RETURN, return_window="23-18")
-        filtered = [directions(url)[1] for url in urls if 8 in directions(url)[1]]
+        filtered = [legs[1] for legs in map(directions, urls) if len(legs) == 2 and 8 in legs[1]]
         self.assertEqual((filtered[0][8], filtered[0][9]), ([18], [23]))
 
 
@@ -94,7 +94,8 @@ class WindowPerDirection(Pages):
 
     def test_a_return_outside_the_return_window_goes_when_google_ignores_the_field(self):
         client.fetch = round_trip([NIGHT], [BACK])
-        self.assertEqual(tools.search_flights("EZE", "BOS", OUT, RETURN, return_window="6-12")["flights"], [])
+        error = tools.search_flights("EZE", "BOS", OUT, RETURN, return_window="6-12")["error"]
+        self.assertEqual((error["type"], error["param"]), ("filtered_out", "return_window"))
 
     def test_a_return_inside_the_return_window_stays(self):
         client.fetch = round_trip([NIGHT], [BACK])
@@ -249,8 +250,8 @@ class LostByTheFilter(Pages):
 
 
 class UnknownAirlineCode(Pages):
-    def test_the_error_names_airlines_when_only_the_filtered_page_is_empty(self):
-        client.fetch = lambda url: "<html></html>" if filtered(url) else page([REGIONAL])
+    def test_the_error_names_airlines_when_google_refuses_only_the_filtered_page(self):
+        client.fetch = lambda url: rejected() if filtered(url) else page([REGIONAL])
         error = tools.search_flights("EZE", "BOS", OUT, airlines=["ZZ"])["error"]
         self.assertEqual((error["type"], error["param"]), ("invalid_request", "airlines"))
         self.assertIn("IATA", error["hint"])
@@ -300,9 +301,8 @@ class SoldAs(Pages):
 
     def test_a_row_the_airline_does_not_sell_goes(self):
         client.fetch = lambda url: page([british("BA175", 1010, ("IB3559",))])
-        out = tools.search_flights("LHR", "JFK", OUT, airlines=["AA"])
-        self.assertEqual(out["flights"], [])
-        self.assertNotIn("codeshares", out)
+        error = tools.search_flights("LHR", "JFK", OUT, airlines=["AA"])["error"]
+        self.assertEqual((error["type"], error["param"]), ("filtered_out", "airlines"))
 
 
 class CodesharesInResult(Pages):

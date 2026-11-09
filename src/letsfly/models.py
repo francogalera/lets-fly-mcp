@@ -1,6 +1,6 @@
 """The shapes a search works with: what is asked (Search), what comes back (Itinerary) and the clock."""
 from dataclasses import dataclass, field
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from letsfly.errors import FlightsError
 
@@ -15,8 +15,18 @@ class ValidationError(FlightsError, ValueError):
     kind = "invalid_request"
 
 
+def now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
 def today() -> date:
-    return datetime.now(timezone.utc).date()
+    return now().date()
+
+
+def earliest_day() -> date:
+    """The earliest date still running somewhere: the last time zone, UTC-12, ends each day 12 hours after UTC. Google
+    refuses a date that is over everywhere."""
+    return (now() - timedelta(hours=12)).date()
 
 
 @dataclass

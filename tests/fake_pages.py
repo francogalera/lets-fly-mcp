@@ -30,9 +30,22 @@ def reference(level, lowest, typical, low, high, points=None):
     return [level, *money, 1, None, None, None, [points] if points else None, None, "London"]
 
 
-def page(rows, price_reference=None):
-    data = json.dumps([None, None, [rows], None] + ([None, price_reference] if price_reference else []))
-    return f"<script>AF_initDataCallback({{key: 'ds:1', hash: '1', data:{data}, sideChannel: {{}}}});</script>"
+def page(rows, price_reference=None, price_range=None):
+    """A results page. price_range is data[7][0], (lowest, highest) of everything Google has before its filters: real
+    pages carry it whenever Google has itineraries, rows or not."""
+    data = [None, None, [rows], None] + ([None, price_reference] if price_reference else [])
+    if price_range:
+        data += [None] * (7 - len(data)) + [[[[None, price_range[0]], [None, price_range[1]]], None]]
+    return f"<script>AF_initDataCallback({{key: 'ds:1', hash: '1', data:{json.dumps(data)}, sideChannel: {{}}}});</script>"
+
+
+def rejected(status=3):
+    """Google's own error as it arrives live, a ds:1 ErrorResponse in place of the results: status 3 refuses the
+    request as invalid, 13 is an internal error that passes."""
+    return (f"<script>AF_initDataCallback({{key: 'ds:1',  data:[{status},null,[["
+            "\"type.googleapis.com/travel.frontend.flights.ErrorResponse\","
+            "[[null,[[1794112037986556,112791372,892324636],null,null,null,null,[[0]]],0,\"a\",\"b\"],3]]]],"
+            "errorHasStatus: true,});</script>")
 
 
 def directions(url):

@@ -9,6 +9,8 @@ STOPS = {"ANY": 0, "NON_STOP": 1, "ONE_STOP": 2, "TWO_PLUS_STOPS": 3}
 SEATS = {"ECONOMY": 1, "PREMIUM_ECONOMY": 2, "BUSINESS": 3, "FIRST": 4}
 # A range start further back than this moves to today; only a reversed range can start that far back
 MAX_PAST_FROM_DAYS = 6
+# Google refuses a date further ahead than this, counted from today in UTC
+MAX_AHEAD_DAYS = 329
 
 
 def flight_search(origin, destination, date, return_date, max_stops, airlines, window, return_window, adults, cabin,
@@ -33,16 +35,22 @@ def date_search(origin, destination, start_date, end_date, trip_days, adults, ma
     """The Search and the days to sweep for cheapest_dates: a reversed range is swapped, an old start moves to today."""
     origins, destinations = airports.resolve(origin, "origin"), airports.resolve(destination, "destination")
     first = _segment_date(start_date, origins, destinations, "start_date")
-    dates = [first]
-    if trip_days:
-        dates.append(_segment_date(_shift(first, trip_days), destinations, origins, "trip_days"))
     start, end = _day(start_date), _day(end_date, "to_date", "end_date")
     if start > end:
         start, end = end, start
-    if end < models.today() - timedelta(days=1):
+    if end < models.earliest_day():
         raise ValidationError("The whole range is in the past", "end_date")
     if (models.today() - start).days > MAX_PAST_FROM_DAYS:
         start = min(models.today(), end)
+    stay, last = timedelta(days=trip_days or 0), _last_day()
+    if end + stay > last:
+        latest = last - stay
+        message = f"The range ends past Google's horizon: it searches up to {last}" + (
+            f", so a {trip_days}-day stay starts by {latest}" if trip_days else "")
+        if start > latest:
+            raise ValidationError(message, "trip_days", f"Start the range by {latest}, or shorten trip_days")
+        raise ValidationError(message, "end_date", f"End the range on {latest} or earlier")
+    dates = [first] + ([_segment_date(_shift(first, trip_days), destinations, origins, "trip_days")] if trip_days else [])
     search = Search(origins, destinations, dates, STOPS[max_stops], 1, adults, currency=parse_currency(currency))
     return search, [start + timedelta(days=n) for n in range((end - start).days + 1)]
 
@@ -92,12 +100,18 @@ def _segment_date(text, origins, destinations, param):
         normalized = datetime.strptime(text, "%Y-%m-%d").strftime("%Y-%m-%d")
     except ValueError as e:
         raise ParseError(f"'{text}' is not a date: YYYY-MM-DD", param) from e
-    # Validation measures against yesterday in UTC: somewhere on Earth it is still that day
-    if _day(normalized) < models.today() - timedelta(days=1):
-        raise ValidationError(f"{normalized} is in the past", param)
+    if _day(normalized) < models.earliest_day():
+        raise ValidationError(f"{normalized} is in the past: that day is over in every time zone", param)
+    if _day(normalized) > (last := _last_day()):
+        raise ValidationError(f"{normalized} is past Google's horizon: it searches up to {last}", param,
+                              f"Search on {last} or earlier")
     if origins[0] == destinations[0]:
         raise ValidationError("The origin and the destination are the same airport", "destination")
     return normalized
+
+
+def _last_day():
+    return models.today() + timedelta(days=MAX_AHEAD_DAYS)
 
 
 def _shift(day, days):
