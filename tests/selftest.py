@@ -28,7 +28,8 @@ failures, pids = [], []
 
 
 def check(name, ok, detail=""):
-    print(f"  {'ok  ' if ok else 'FAIL'} {name}{f': {detail}' if detail else ''}")
+    # flush: python -I ignores PYTHONUNBUFFERED, and a run killed for hanging would leave an empty log in CI
+    print(f"  {'ok  ' if ok else 'FAIL'} {name}{f': {detail}' if detail else ''}", flush=True)
     if not ok:
         failures.append(name)
 
@@ -229,11 +230,12 @@ def main():
         check("MCP: promociones-aereas, short list", bool(deals) and all(d.get("url") for d in deals) and len(text) < 4000,
               f"{len(deals)} deals, {len(text)} characters" if deals else text[:200])
         fits("promociones-aereas", schemas.get("promociones-aereas"), res)
-        res = mcp.call("tools/call", {"name": "promociones-aereas", "arguments": {"type": "package", "limit": 1}})["result"]
-        deal = (json.loads(res["content"][0]["text"]).get("deals") or [{}])[0]
-        det = deal.get("details", {})
+        res = mcp.call("tools/call", {"name": "promociones-aereas", "arguments": {"type": "package", "limit": 3}})["result"]
+        text = res["content"][0]["text"]
+        # The newest package can be a coupon, a real post with no dates
+        det = next((d["details"] for d in json.loads(text).get("deals", []) if d.get("details", {}).get("dates")), {})
         check("MCP: promociones-aereas with details by default (keeps 5 s between requests)", bool(det.get("prices_seen_at") and det.get("dates")),
-              f"{len(det.get('dates', []))} dates, prices from {det.get('prices_seen_at')}" if det.get("dates") else str(det)[:200])
+              f"{len(det.get('dates', []))} dates, prices from {det.get('prices_seen_at')}" if det else text[:200])
         fits("promociones-aereas with details", schemas.get("promociones-aereas"), res)
         verdict = probe_network(mcp.p.pid)
         check("network: google passes, example.com 403, no direct connection",
