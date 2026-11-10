@@ -18,14 +18,17 @@ from letsfly.mcp import problems  # noqa: E402  stdlib only, so it runs on the h
 LAUNCHER = sys.argv[1]
 IMAGE = subprocess.run([LAUNCHER, "image"], capture_output=True, text=True, check=True).stdout.strip()
 LOG = os.path.join(os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state"), "flights", "egress.log")
+BUDGET = os.path.expanduser("~/.local/state/flights/metasearch-budget.log")
 DAY = datetime.date.today() + datetime.timedelta(days=45)
 DATE, RETURN, RANGE_END = (DAY + datetime.timedelta(days=n) for n in (0, 10, 4))
 DATE, RETURN, RANGE_END = DATE.isoformat(), RETURN.isoformat(), RANGE_END.isoformat()
 ROUTE = ("EZE", "GRU")
 # What the proxy lets through, read from the launcher's ALLOW; the test itself causes the BLOCK
 with open(LAUNCHER) as f:
-    ALLOWED = re.search(r"^ALLOW=(\S+)$", f.read(), re.M).group(1).split(",")
-EXPECTED_EGRESS = {f"ALLOW {host}:443" for host in ALLOWED} | {"BLOCK example.com:443"}
+    source = f.read()
+ALLOWED = re.search(r"^ALLOW=(\S+)$", source, re.M).group(1).split(",")
+METASEARCH = re.search(r"^METASEARCH=(\S+)$", source, re.M).group(1)
+EXPECTED_EGRESS = {f"ALLOW {host}:443" for host in ALLOWED} | {"BLOCK example.com:443", f"TRACE {METASEARCH}:443"}
 # An external limit, not a broken build: the metasearch can refuse a shared IP, as CI runners have
 LIMITS = {"metasearch_blocked", "metasearch_challenge"}
 failures, pids = [], []
@@ -161,7 +164,7 @@ def live_metasearch(mcp, schemas):
     rows = data.get("flights", [])
     check("MCP: metasearch_flights round trip, with sellers, spending 1 search",
           bool(rows) and all(r.get("sellers") and "back" in r for r in rows) and data.get("cost") == 1
-          and data.get("budget", {}).get("used_last_hour", 0) >= 1,
+          and data.get("budget", {}).get("used_last_hour", 0) >= 1 and data["budget"].get("shared") is True,
           f"{len(rows)} options from USD {rows[0]['price']:.0f}, {rows[0]['sellers'][0]['name']}" if rows else problem(data))
     fits("metasearch_flights", schemas.get("metasearch_flights"), res)
     _, again = call("metasearch_flights", trip | {"max_stops": "ONE_STOP"})
@@ -209,6 +212,22 @@ print(proxy("www.google.com:443"), proxy("example.com:443"), direct())
                         "--security-opt=no-new-privileges", "--entrypoint", "/usr/local/bin/python3", IMAGE,
                         "-I", "-c", code], capture_output=True, text=True, timeout=60)
     return r.stdout.strip() or r.stderr.strip()[-200:]
+
+
+def probe_mounts(pid):
+    """The session's containers, by role: the core mounts nothing, the proxy only the budget file, read-only."""
+    ids = subprocess.run(["docker", "ps", "-q", "--filter", f"label=flights.pid={pid}"],
+                         capture_output=True, text=True).stdout.split()
+    out = subprocess.run(["docker", "inspect", *ids], capture_output=True, text=True).stdout if ids else ""
+    found = json.loads(out or "[]")
+    roles = {c["Config"]["Labels"].get("flights.role", "core"): c["Mounts"] for c in found}
+    core, proxy = roles.get("core"), roles.get("proxy")
+    check("network: the core has no mounts", core == [], "no core container" if core is None else json.dumps(core))
+    check("network: the proxy mounts only the budget file, read-only",
+          proxy is not None and len(proxy) == 1 and proxy[0].get("Type") == "bind"
+          and proxy[0].get("Source") in {BUDGET, os.path.realpath(BUDGET)}
+          and proxy[0].get("Destination") == "/budget.log" and proxy[0].get("RW") is False,
+          "no proxy container" if proxy is None else json.dumps(proxy))
 
 
 def main():
@@ -273,6 +292,7 @@ def main():
         verdict = probe_network(mcp.p.pid)
         check("network: google passes, example.com 403, no direct connection",
               verdict == "200 403 no network", verdict or "could not find the session network")
+        probe_mounts(mcp.p.pid)
     except Exception as e:  # noqa: BLE001
         check("MCP", False, f"{type(e).__name__}: {e}")
     mcp.p.stdin.close()

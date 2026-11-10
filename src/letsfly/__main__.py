@@ -47,7 +47,10 @@ def main():
         print(out["note"])
     if "budget" in out:
         budget = out["budget"]
-        print(f"Cost: {out['cost']} search; {budget['used_last_hour']} of {budget['safe_per_hour']} in the last hour")
+        whose = "" if budget["shared"] else " (this session only: the proxy could not count the others)"
+        print(f"Cost: {out['cost']} search; {budget['used_last_hour']} of {budget['safe_per_hour']} in the last hour{whose}")
+        if budget.get("warning"):
+            print(f"Warning: {budget['warning']}")
 
 
 def _flights(out):

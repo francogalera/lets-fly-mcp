@@ -4,6 +4,8 @@ GraphQL (dates and price history) are free. The host is named here and in bin/fl
 Flow, as the web client runs it: search, meta every EVERY s until version is "final", one pull of the whole result."""
 import base64
 import binascii
+import http.client
+import json
 import random
 import threading
 import time
@@ -111,6 +113,7 @@ def search(legs, adults, cabin):
     complete is False when meta did not reach final within POLLS: the slowest sellers are missing. An empty result
     is not kept: the metasearch sometimes answers final with no itineraries for minutes, for a trip it sells."""
     k = (key(legs), adults, cabin)
+    vars(_local).pop("spend", None)
     with _searching:
         hit = _cache.get(k)
         if hit and models.now() - hit[0] < CACHE_FOR:
@@ -120,6 +123,7 @@ def search(legs, adults, cabin):
             params["cabinClass"] = CABINS[cabin]
         started = _get("/flights/search", params)
         _spent.append(models.now())
+        _local.spend = (_proxy("POST", "/budget/spend"),)
         sid = started.get("searchId") if isinstance(started, dict) else None
         if not sid:
             raise MetasearchUnreadable("The search started without an id")
@@ -137,9 +141,26 @@ def search(legs, adults, cabin):
 
 
 def budget():
-    """What this session spent: searches in the last hour, against the most that never got an IP blocked."""
-    hour_ago = models.now() - timedelta(hours=1)
-    return {"used_last_hour": sum(1 for t in _spent if t > hour_ago), "safe_per_hour": SAFE_PER_HOUR}
+    """Searches from this IP in the last hour by every session, as the proxy counts them, against the most that never
+    got an IP blocked, with the IP's live block and a warning when either calls for asking the user first. Without the
+    proxy, this session's own count, shared False. Takes the reply search() kept, else asks the proxy once."""
+    kept = vars(_local).pop("spend", None)
+    reply = kept[0] if kept else _proxy("GET", "/budget")
+    if reply:
+        out = {"used_last_hour": reply["used_last_hour"], "safe_per_hour": SAFE_PER_HOUR, "shared": True}
+        if reply.get("blocked_at"):
+            out["blocked_at"] = reply["blocked_at"]
+    else:
+        hour_ago = models.now() - timedelta(hours=1)
+        out = {"used_last_hour": sum(1 for t in _spent if t > hour_ago), "safe_per_hour": SAFE_PER_HOUR, "shared": False}
+    if "blocked_at" in out:
+        out["warning"] = (f"The metasearch blocked this IP at {out['blocked_at']}: another search may extend the block "
+                          "for hours. Ask the user before another one")
+    elif out["used_last_hour"] >= SAFE_PER_HOUR:
+        whose = "from this IP" if out["shared"] else "from this session"
+        out["warning"] = (f"{out['used_last_hour']} searches {whose} in the last hour reach the safe limit of "
+                          f"{SAFE_PER_HOUR}: another may get the IP blocked for hours. Ask the user before another one")
+    return out
 
 
 def calendar(origin, destination, month, round_trip, outbound=None):
@@ -317,7 +338,10 @@ def _get(path, params, headers=None):
         raise MetasearchChallenge("Cloudflare asked for a browser check, which this client cannot pass",
                                   hint="Go on with search_flights")
     if response.status_code in (403, 429):
+        first = _blocked[0] is None
         _blocked[0] = models.now()
+        if first:
+            _proxy("POST", "/budget/block")
         raise MetasearchBlocked(f"The metasearch refused this IP (HTTP {response.status_code}): its search limit",
                                 hint=BLOCKED_HINT)
     if response.status_code == 400 and path == "/graphql-cdn":
@@ -328,6 +352,27 @@ def _get(path, params, headers=None):
         return response.json()
     except ValueError as e:
         raise MetasearchUnreadable("The metasearch answered something that is not JSON") from e
+
+
+def _proxy(method, path):
+    """The proxy's budget for this IP, {"used_last_hour", maybe "blocked_at"}, or None when it cannot give one. Plain
+    HTTP to the proxy itself: http.client reads no proxy env, so HTTP_PROXY does not route it elsewhere."""
+    try:
+        connection = http.client.HTTPConnection("proxy", 3128, timeout=10)
+        try:
+            connection.request(method, path)
+            response = connection.getresponse()
+            body = response.read()
+        finally:
+            connection.close()
+        reply = json.loads(body) if response.status == 200 else None
+    except Exception:
+        return None
+    if not isinstance(reply, dict) or type(reply.get("used_last_hour")) is not int:
+        return None
+    if "blocked_at" in reply and not isinstance(reply["blocked_at"], str):
+        return None
+    return reply
 
 
 def _session():

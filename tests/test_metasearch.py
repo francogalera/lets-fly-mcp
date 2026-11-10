@@ -1,5 +1,5 @@
 """The metasearch on answers written by hand: the search flow and its stop rule, the decoder, blocks, the cache and
-the budget, the dates over GraphQL, and the two tools."""
+the budget and the proxy's shared count, the dates over GraphQL, and the two tools."""
 import contextlib
 import io
 import json
@@ -17,8 +17,11 @@ TRIP = [("EZE", "MAD", "2027-04-14"), ("MAD", "EZE", "2027-04-28")]
 
 class Base(unittest.TestCase):
     def setUp(self):
-        self.real = metasearch._session, metasearch.sleep, models.now
+        self.real = metasearch._session, metasearch.sleep, models.now, metasearch._proxy
         self.clock = [NOW]
+        self.proxied, self.proxy_says = [], {}
+        metasearch._proxy = self.proxy
+        vars(metasearch._local).pop("spend", None)
         self.slept = []
         metasearch.sleep = self.slept.append
         models.now = lambda: self.clock[0]
@@ -28,7 +31,8 @@ class Base(unittest.TestCase):
         self.serve(fake.Session())
 
     def tearDown(self):
-        metasearch._session, metasearch.sleep, models.now = self.real
+        metasearch._session, metasearch.sleep, models.now, metasearch._proxy = self.real
+        vars(metasearch._local).pop("spend", None)
         metasearch._cache.clear()
         metasearch._spent.clear()
         metasearch._blocked[0] = None
@@ -39,6 +43,10 @@ class Base(unittest.TestCase):
 
     def paths(self):
         return [path for path, _ in self.session.calls]
+
+    def proxy(self, method, path):
+        self.proxied.append((method, path))
+        return self.proxy_says.get(path)
 
 
 class Search(Base):
@@ -128,7 +136,7 @@ class Search(Base):
     def test_the_budget_counts_real_searches_of_the_last_hour(self):
         metasearch.search(TRIP, 1, "ECONOMY")
         metasearch.search(TRIP, 1, "ECONOMY")
-        self.assertEqual(metasearch.budget(), {"used_last_hour": 1, "safe_per_hour": 10})
+        self.assertEqual(metasearch.budget(), {"used_last_hour": 1, "safe_per_hour": 10, "shared": False})
         self.clock[0] = NOW + timedelta(minutes=30)
         metasearch.search(TRIP, 2, "ECONOMY")
         self.assertEqual(metasearch.budget()["used_last_hour"], 2)
@@ -253,7 +261,7 @@ class FlightsTool(Base):
         self.assertEqual((glued["out"]["route"], glued["out"]["flights"], glued["back"]["route"]),
                          ("EZE-GRU-MAD", "JA3070 UX26", "MAD-GRU-EZE"))
         self.assertEqual(glued["out"]["layovers"], [{"airport": "GRU", "minutes": 220, "overnight": True}])
-        self.assertEqual((out["cost"], out["budget"]), (1, {"used_last_hour": 1, "safe_per_hour": 10}))
+        self.assertEqual((out["cost"], out["budget"]), (1, {"used_last_hour": 1, "safe_per_hour": 10, "shared": False}))
 
     def test_the_summary_points_to_each_cheapest_and_the_fastest(self):
         out = self.run_tool()
@@ -355,6 +363,123 @@ class FlightsTool(Base):
         self.assertEqual((error["type"], error["hint"]), ("metasearch_blocked", metasearch.BLOCKED_HINT))
 
 
+class SharedBudget(Base):
+    SPEND, READ, BLOCK = ("POST", "/budget/spend"), ("GET", "/budget"), ("POST", "/budget/block")
+
+    def run_tool(self, **arguments):
+        return tools.metasearch_flights(**({"origin": "EZE", "destination": "MAD", "date": "2027-04-14",
+                                            "return_date": "2027-04-28"} | arguments))
+
+    def test_a_new_search_annotates_its_spend_once_and_the_budget_is_the_proxys_count(self):
+        self.proxy_says = {"/budget/spend": {"used_last_hour": 4}}
+        out = self.run_tool()
+        self.assertEqual(out["budget"], {"used_last_hour": 4, "safe_per_hour": 10, "shared": True})
+        self.assertEqual(self.proxied, [self.SPEND])
+
+    def test_a_cached_search_reads_the_count_once(self):
+        self.proxy_says = {"/budget/spend": {"used_last_hour": 4}, "/budget": {"used_last_hour": 6}}
+        self.run_tool()
+        out = self.run_tool(max_stops="NON_STOP")
+        self.assertEqual((out["cost"], out["budget"]["used_last_hour"]), (0, 6))
+        self.assertEqual(self.proxied, [self.SPEND, self.READ])
+
+    def test_a_poll_failing_after_the_search_started_still_annotates_the_spend(self):
+        self.serve(fake.Session(override={"/flights/pull/": fake.Response(status=502, text="")}))
+        with self.assertRaises(metasearch.MetasearchRefused):
+            metasearch.search(TRIP, 1, "ECONOMY")
+        self.assertEqual(self.proxied, [self.SPEND])
+
+    def test_a_spend_kept_by_a_failed_search_does_not_leak_into_the_next_budget(self):
+        self.proxy_says = {"/budget/spend": {"used_last_hour": 4}, "/budget": {"used_last_hour": 7}}
+        metasearch.search(TRIP, 1, "ECONOMY")
+        self.serve(fake.Session(override={"/flights/pull/": fake.Response(status=502, text="")}))
+        with self.assertRaises(metasearch.MetasearchRefused):
+            metasearch.search(TRIP, 2, "ECONOMY")
+        self.assertEqual(metasearch.search(TRIP, 1, "ECONOMY")[1], 0)
+        self.assertEqual(metasearch.budget()["used_last_hour"], 7)
+
+    def test_a_403_or_429_annotates_the_block_once(self):
+        for status in (403, 429):
+            with self.subTest(status):
+                metasearch._blocked[0], self.proxied = None, []
+                self.serve(fake.Session(override={"/flights/search": fake.Response(status=status, text="")}))
+                for legs in (TRIP, [("AEP", "MDZ", "2027-03-05")]):
+                    with self.assertRaises(metasearch.MetasearchBlocked):
+                        metasearch.search(legs, 1, "ECONOMY")
+                self.assertEqual(self.proxied, [self.BLOCK])
+
+    def test_a_challenge_annotates_nothing(self):
+        challenge = fake.Response(status=403, headers={"cf-mitigated": "challenge"}, text="<html>Just a moment...")
+        self.serve(fake.Session(override={"/flights/search": challenge}))
+        with self.assertRaises(metasearch.MetasearchChallenge):
+            metasearch.search(TRIP, 1, "ECONOMY")
+        self.assertEqual(self.proxied, [])
+
+    def test_without_the_proxy_the_budget_is_this_sessions_count(self):
+        metasearch.search(TRIP, 1, "ECONOMY")
+        metasearch.search(TRIP, 2, "ECONOMY")
+        self.assertEqual(metasearch.budget(), {"used_last_hour": 2, "safe_per_hour": 10, "shared": False})
+        self.assertEqual(self.proxied, [self.SPEND, self.SPEND])
+
+    def test_at_the_safe_limit_it_warns_and_below_it_does_not(self):
+        self.proxy_says = {"/budget": {"used_last_hour": 9}}
+        self.assertNotIn("warning", metasearch.budget())
+        self.proxy_says = {"/budget": {"used_last_hour": 10}}
+        warning = metasearch.budget()["warning"]
+        self.assertIn("10 searches from this IP", warning)
+        self.assertIn("Ask the user", warning)
+
+    def test_without_the_proxy_it_warns_at_the_limit_of_this_session(self):
+        metasearch._spent.extend([NOW - timedelta(minutes=5)] * 10)
+        out = metasearch.budget()
+        self.assertEqual((out["used_last_hour"], out["shared"]), (10, False))
+        self.assertIn("10 searches from this session", out["warning"])
+
+    def test_a_live_block_of_the_ip_passes_through_and_warns(self):
+        self.proxy_says = {"/budget": {"used_last_hour": 2, "blocked_at": "2026-11-10T09:00:00Z"}}
+        out = metasearch.budget()
+        self.assertEqual((out["used_last_hour"], out["shared"], out["blocked_at"]), (2, True, "2026-11-10T09:00:00Z"))
+        self.assertIn("blocked this IP at 2026-11-10T09:00:00Z", out["warning"])
+        self.assertIn("Ask the user", out["warning"])
+
+
+class SharedBudgetClient(unittest.TestCase):
+    """The real client against a connection written by hand: anything but a 200 with a count is None."""
+
+    def ask(self, status=200, body=b'{"used_last_hour": 3}', fails=None):
+        made = []
+
+        class Connection:
+            def __init__(self, host, port, timeout):
+                made.append((host, port, timeout))
+
+            def request(self, method, path):
+                if fails:
+                    raise fails
+                made.append((method, path))
+
+            def getresponse(self):
+                return mock.Mock(status=status, read=lambda: body)
+
+            def close(self):
+                made.append("closed")
+
+        with mock.patch("http.client.HTTPConnection", Connection):
+            return metasearch._proxy("POST", "/budget/spend"), made
+
+    def test_it_posts_to_the_proxy_itself_and_reads_the_count(self):
+        self.assertEqual(self.ask(), ({"used_last_hour": 3}, [("proxy", 3128, 10), ("POST", "/budget/spend"), "closed"]))
+        self.assertEqual(self.ask(body=b'{"used_last_hour": 3, "blocked_at": "2026-11-10T09:00:00Z"}')[0],
+                         {"used_last_hour": 3, "blocked_at": "2026-11-10T09:00:00Z"})
+
+    def test_a_refusal_an_unreadable_answer_or_no_connection_is_none(self):
+        for status, body, fails in ((429, b'{"used_last_hour": 3}', None), (502, b"", None), (403, b"", None),
+                                    (200, b"<html>", None), (200, b'{"used": 3}', None),
+                                    (200, b'{"used_last_hour": true}', None), (200, b"", ConnectionRefusedError())):
+            with self.subTest(f"{status} {body!r} {fails!r}"):
+                self.assertIsNone(self.ask(status, body, fails)[0])
+
+
 CALENDAR = [{"price": 655, "calendardate": "2027-04-26", "isLowprice": False},
             {"price": 550, "calendardate": "2027-04-11", "isLowprice": True}]
 MONTHS = [{"minprice": 804, "month": 2, "year": 2027}, {"minprice": 845, "month": 11, "year": 2026}]
@@ -413,10 +538,19 @@ class DatesToolAndTerminal(Base):
         printed = self.terminal("meta-dates", "BUE", "MAD", "--month", "2027-04").splitlines()
         self.assertEqual(printed[:2], ["2027-04-11  USD 550  low", "2027-04-26  USD 655"])
         self.serve(fake.Session())
+        self.proxy_says = {"/budget/spend": {"used_last_hour": 1}}
         printed = self.terminal("meta", "EZE", "MAD", "2027-04-14", "2027-04-28", "--limit", "1")
         self.assertTrue(printed.startswith("USD 800  JetSMART, Air Europa  from Agency B  (separate tickets)"))
         self.assertTrue(printed.rstrip().endswith("Cost: 1 search; 1 of 10 in the last hour"))
         self.assertEqual(json.loads(self.terminal("meta", "EZE", "MAD", "2027-04-14", "--json"))["cost"], 1)
+
+    def test_the_terminal_says_when_the_count_is_this_sessions_only_and_prints_the_warning(self):
+        self.serve(fake.Session())
+        metasearch._spent.extend([NOW - timedelta(minutes=5)] * 9)
+        printed = self.terminal("meta", "EZE", "MAD", "2027-04-14", "2027-04-28", "--limit", "1").rstrip().splitlines()
+        self.assertEqual(printed[-2], "Cost: 1 search; 10 of 10 in the last hour (this session only: the proxy could "
+                                      "not count the others)")
+        self.assertTrue(printed[-1].startswith("Warning: 10 searches from this session in the last hour"))
 
 
 if __name__ == "__main__":

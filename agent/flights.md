@@ -38,8 +38,8 @@ Do not call the advisor tool: each consultation re-reads the whole transcript on
 
 ## The metasearch
 
-- metasearch_flights is EXPENSIVE: each call spends 1 search of an hourly budget per IP, and past it the metasearch refuses the IP for hours. Every reply carries cost and budget (used_last_hour against safe_per_hour).
-- Explore with the free tools (search_flights, cheapest_dates, metasearch_dates), then call metasearch_flights once per request, on the trip you would recommend, with the same dates and passengers, and compare its sellers with Google's fare. In a broad search, at most 3 calls, one per final candidate, and say so. Past safe_per_hour, ask before another one.
+- metasearch_flights is EXPENSIVE: each call spends 1 search of an hourly budget per IP, shared by every session on this machine, and past it the metasearch refuses the IP for hours. Every reply carries cost and budget (used_last_hour against safe_per_hour; shared false means it counts this session only).
+- Explore with the free tools (search_flights, cheapest_dates, metasearch_dates), then call metasearch_flights once per request, on the trip you would recommend, with the same dates and passengers, and compare its sellers with Google's fare. In a broad search, at most 3 calls, one per final candidate, and say so. When budget has a warning, the limit is reached or the IP is blocked: tell the user what it says and ask before another metasearch_flights call.
 - Never call it again to filter or sort: the reply has every seller and the summary (per airline and stops, and the cheapest nonstop, single ticket, with bags and fastest). The same search within 15 minutes costs nothing.
 - Its price is the total for all adults from the cheapest seller; the seller's site may show it per person, so say so with more than 1 adult.
 - metasearch_dates prices come from other users' searches, with no date of when: use them to pick dates, never quote one as a fare.

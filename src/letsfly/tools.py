@@ -234,8 +234,11 @@ MetaReference = TypedDict("MetaReference", {
 
 
 class Budget(TypedDict):
-    used_last_hour: Annotated[int, "Metasearch searches this session made in the last hour"]
+    used_last_hour: Annotated[int, "Metasearch searches from this IP in the last hour by every session on it; only this session's when shared is false"]
     safe_per_hour: Annotated[int, "The most that never got an IP blocked; past it the metasearch may refuse this IP for hours"]
+    shared: Annotated[bool, "True when used_last_hour counts every session on this IP, false when the proxy could not count and it is this session's alone"]
+    blocked_at: NotRequired[Annotated[str, "When the metasearch blocked this IP, YYYY-MM-DDTHH:MM:SSZ, while the block may still hold"]]
+    warning: NotRequired[Annotated[str, "Present at safe_per_hour or with blocked_at: another search may get the IP blocked, or extend the block, for hours. Ask the user before another one"]]
 
 
 class MetaFlightsResult(TypedDict):

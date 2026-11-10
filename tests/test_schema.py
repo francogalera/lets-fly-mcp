@@ -69,6 +69,7 @@ class OutputSchema(unittest.TestCase):
         self.assertIn("price_reference.history.weekly", paths["search_flights"])
         self.assertIn("deals[].details.dates[].to", paths["promociones-aereas"])
         self.assertIn("error.hint", paths["find_airports"])
+        self.assertEqual({"budget.shared", "budget.blocked_at", "budget.warning"} - paths["metasearch_flights"].keys(), set())
         for name, found in paths.items():
             for path, schema in found.items():
                 with self.subTest(f"{name} {path}"):
@@ -108,11 +109,15 @@ class OutputSchema(unittest.TestCase):
 
     def test_metasearch_flights_fit(self):
         session = fake_metasearch.Session(graph={"statsLast90": [{"avg_price": 900, "created": "2026-09-01"}]})
-        with mock.patch.object(metasearch, "_session", lambda: session), mock.patch.object(metasearch, "sleep", lambda s: None):
+        replies = iter([None, {"used_last_hour": 12, "blocked_at": "2026-12-01T09:00:00Z"}])
+        with mock.patch.object(metasearch, "_session", lambda: session), mock.patch.object(metasearch, "sleep", lambda s: None), \
+                mock.patch.object(metasearch, "_proxy", lambda method, path: next(replies)):
             metasearch._cache.clear()
             self.fits("metasearch_flights", tools.metasearch_flights("EZE", "MAD", "2026-12-10", "2026-12-20"))
             session.result = fake_metasearch.ONE_WAY
-            self.fits("metasearch_flights", tools.metasearch_flights("AEP", "MDZ", "2026-12-10", limit=1))
+            out = tools.metasearch_flights("AEP", "MDZ", "2026-12-10", limit=1)
+            self.assertEqual({"shared", "blocked_at", "warning"} - out["budget"].keys(), set())
+            self.fits("metasearch_flights", out)
             metasearch._cache.clear()
 
     def test_metasearch_dates_fit(self):
