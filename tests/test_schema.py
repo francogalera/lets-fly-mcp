@@ -6,11 +6,13 @@ import unittest
 from unittest import mock
 
 from fake_pages import days, leg, page, reference, row
-from letsfly import client, errors, mcp, models, promos, tools
+import fake_metasearch
+from letsfly import client, errors, mcp, metasearch, models, promos, tools
 from test_decode import BACK, GLUED, NIGHT, NOW, REGIONAL
 from test_mcp import converse
 
-TOOLS = ("search_flights", "cheapest_dates", "find_airports", "promociones-aereas")
+TOOLS = ("search_flights", "cheapest_dates", "find_airports", "promociones-aereas", "metasearch_flights",
+         "metasearch_dates")
 FEED = ("<rss><channel><item><title>Paquetes a Cancún desde Buenos Aires por U$D 1.234 por persona en base doble</title>"
         "<link>https://promociones-aereas.com.ar/cancun-schema-pa-p.html</link>"
         "<pubDate>Sat, 31 Oct 2026 16:30:00 +0000</pubDate></item>"
@@ -67,6 +69,7 @@ class OutputSchema(unittest.TestCase):
         self.assertIn("price_reference.history.weekly", paths["search_flights"])
         self.assertIn("deals[].details.dates[].to", paths["promociones-aereas"])
         self.assertIn("error.hint", paths["find_airports"])
+        self.assertEqual({"budget.shared", "budget.blocked_at", "budget.warning"} - paths["metasearch_flights"].keys(), set())
         for name, found in paths.items():
             for path, schema in found.items():
                 with self.subTest(f"{name} {path}"):
@@ -103,6 +106,26 @@ class OutputSchema(unittest.TestCase):
         out = tools.cheapest_dates("EZE", "BOS", "2026-12-10", "2026-12-12")
         self.assertIn("note", out)
         self.fits("cheapest_dates", out)
+
+    def test_metasearch_flights_fit(self):
+        session = fake_metasearch.Session(graph={"statsLast90": [{"avg_price": 900, "created": "2026-09-01"}]})
+        replies = iter([None, {"used_last_hour": 12, "blocked_at": "2026-12-01T09:00:00Z"}])
+        with mock.patch.object(metasearch, "_session", lambda: session), mock.patch.object(metasearch, "sleep", lambda s: None), \
+                mock.patch.object(metasearch, "_proxy", lambda method, path: next(replies)):
+            metasearch._cache.clear()
+            self.fits("metasearch_flights", tools.metasearch_flights("EZE", "MAD", "2026-12-10", "2026-12-20"))
+            session.result = fake_metasearch.ONE_WAY
+            out = tools.metasearch_flights("AEP", "MDZ", "2026-12-10", limit=1)
+            self.assertEqual({"shared", "blocked_at", "warning"} - out["budget"].keys(), set())
+            self.fits("metasearch_flights", out)
+            metasearch._cache.clear()
+
+    def test_metasearch_dates_fit(self):
+        session = fake_metasearch.Session(graph={"calendarFlightPrices": [{"price": 550, "calendardate": "2026-12-11",
+                                                                           "isLowprice": True}]})
+        with mock.patch.object(metasearch, "_session", lambda: session):
+            self.fits("metasearch_dates", tools.metasearch_dates("BUE", "MAD", month="2026-12"))
+            self.fits("metasearch_dates", tools.metasearch_dates("BUE", "MAD"))
 
     def test_airports_fit(self):
         self.fits("find_airports", tools.find_airports("Londres"))

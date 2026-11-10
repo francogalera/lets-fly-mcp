@@ -19,10 +19,12 @@ if command -v sha256sum >/dev/null; then SHA=(sha256sum); else SHA=(shasum -a 25
 IMAGE="lets-fly-core:$(cd "$HERE" && find src/letsfly docker -type f ! -path '*/__pycache__/*' -print0 | LC_ALL=C sort -z |
   xargs -0 "${SHA[@]}" | "${SHA[@]}" | cut -c1-12)"
 PROXY_IMAGE="lets-fly-proxy:$("${SHA[@]}" "$HERE/docker/proxy.py" | cut -c1-12)"
-ALLOW=www.google.com,promociones-aereas.com.ar
+ALLOW=www.google.com,promociones-aereas.com.ar,api.turismocity.com
+METASEARCH=api.turismocity.com
 LOG="${XDG_STATE_HOME:-$HOME/.local/state}/flights/egress.log"
 # Not XDG_STATE_HOME: the service and some clients start without it, and every caller must find the same folder
 LINKS="$HOME/.local/state/flights/links"
+BUDGET="$HOME/.local/state/flights/metasearch-budget.log"
 SESSION="flights-$$-$RANDOM"
 PROXY=http://proxy:3128
 # bash as macOS ships it, for the tests
@@ -35,6 +37,8 @@ usage: flights COMMAND [ARGS]
   search ORIGIN DESTINATION DATE [RETURN]      flights on one date, cheapest first
   dates ORIGIN DESTINATION START END [DAYS]    lowest price per departure date
   airports QUERY                               airports by code, city or name
+  meta ORIGIN DESTINATION DATE [RETURN]        every seller's fares on the metasearch (spends 1 search)
+  meta-dates ORIGIN DESTINATION [--month M]    lowest fares the metasearch saw, per month or day (free)
   audit [filters]                              live data checks: pair prices, dates, a burst, the filters
   mcp                                          the MCP server over stdio, for the flights agent
   links                                        the link server, which runs as a service of the user
@@ -46,7 +50,7 @@ usage: flights COMMAND [ARGS]
   test                                         offline tests in the image, this script on bash 3.2, --from with git
   selftest                                     live check: searches, filters, MCP, network blocking, cleanup
 
-search, dates and airports take --json (the reply as the agent gets it); COMMAND --help shows the rest.
+search, dates, airports, meta and meta-dates take --json (the reply as the agent gets it); COMMAND --help shows the rest.
 USAGE
 }
 
@@ -58,7 +62,8 @@ build() {
 
 save_log() {
   mkdir -p "$(dirname "$LOG")"
-  docker logs "$1" 2>/dev/null | grep -v '^LISTEN' >> "$LOG" || true
+  # BUDGET lines too: read after the fact, they would carry the sweep's time and old spends would count as new
+  docker logs "$1" 2>/dev/null | grep -v -e '^LISTEN' -e '^BUDGET' >> "$LOG" || true
 }
 
 # Leftovers of a run that died without cleaning up (kill -9, power cut): its process is gone
@@ -85,7 +90,8 @@ remove_network() {
 # Appends the proxy's log as it is written and removes the network once the proxy is gone
 watch_proxy() {
   mkdir -p "$(dirname "$LOG")"
-  docker logs -f "$SESSION-proxy" 2>/dev/null | grep --line-buffered -v '^LISTEN' >> "$LOG" || true
+  docker logs -f "$SESSION-proxy" 2>/dev/null |
+    python3 -I "$HERE/bin/budget.py" split "$SESSION" "$BUDGET" >> "$LOG" || true
   remove_network
 }
 
@@ -110,10 +116,21 @@ on_signal() {
   exit 130
 }
 
+# 644, not 600: the proxy reads it as uid 65534. Trimmed only when no other proxy has it mounted
+budget_file() {
+  mkdir -p "$(dirname "$BUDGET")"
+  : >> "$BUDGET"
+  chmod 644 "$BUDGET"
+  [ -n "$(docker ps -q --filter label=flights.role=proxy)" ] ||
+    python3 -I "$HERE/bin/budget.py" trim "$BUDGET" </dev/null || true
+}
+
 start_proxy() {
+  budget_file
   docker run -d --rm --init --pull never --name "$SESSION-proxy" --label "flights.pid=$$" --label flights.role=proxy \
     --cap-drop=ALL --security-opt=no-new-privileges --read-only --memory=128m --pids-limit=64 \
-    "$PROXY_IMAGE" 3128 "$ALLOW" "$SESSION" >/dev/null
+    --mount "type=bind,src=$BUDGET,dst=/budget.log,readonly" \
+    "$PROXY_IMAGE" 3128 "$ALLOW" "$SESSION" "$METASEARCH" >/dev/null
   docker network connect --alias proxy "$SESSION" "$SESSION-proxy"
   detach watch_proxy
   watcher=$!

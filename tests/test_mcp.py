@@ -24,6 +24,12 @@ def fail() -> dict:
         raise errors.CityCode("'BUE' is a city code", "origin", "EZE,AEP") from e
 
 
+@mcp.tool("test_costly", cost="expensive")
+def costly() -> dict:
+    """Costs a search."""
+    return {}
+
+
 def converse(*messages, instructions=None):
     stdin, stdout = sys.stdin, sys.stdout
     sys.stdin, sys.stdout = io.StringIO("".join(json.dumps(m) + "\n" for m in messages)), io.StringIO()
@@ -93,6 +99,17 @@ class Instructions(unittest.TestCase):
                      "Flexible dates: cheapest_dates first", "No flights is an error"):
             self.assertIn(rule, core)
         self.assertLess(len(tools.INSTRUCTIONS.encode()), 1000)
+
+    def test_an_expensive_tool_says_its_cost_last_and_a_free_one_does_not(self):
+        listed = {t["name"]: t["description"]
+                  for t in converse({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})[0]["result"]["tools"]}
+        self.assertEqual(listed["test_costly"], "Costs a search.\n" + mcp.COSTS["expensive"])
+        self.assertTrue(listed["test_costly"].endswith("Never call it twice for the same search."))
+        self.assertNotIn("EXPENSIVE", listed["test_wait"])
+
+    def test_an_unknown_cost_fails_at_registration(self):
+        with self.assertRaises(KeyError):
+            mcp.tool("test_unknown_cost", cost="cheap")(lambda: {})
 
     def test_every_tool_description_is_under_1000_bytes(self):
         listed = converse({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})[0]["result"]["tools"]

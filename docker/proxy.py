@@ -1,24 +1,117 @@
 #!/usr/bin/env python3
 """Egress proxy for flights, the only way out of the core's network: lets HTTPS through only to the allowed hosts
-and logs each attempt to stdout as `UTC-datetime ALLOW|BLOCK|ERROR host:port session` for bin/flights to collect.
+and logs each attempt to stdout as `UTC-datetime ALLOW|BLOCK|ERROR|TRACE host:port session` for bin/flights to
+collect. Also answers the budget routes over plain HTTP, counting the metasearch calls of every session on the egress
+IP from the shared file plus its own, and prints each accepted one as `BUDGET KIND IP` for bin/flights to append.
 Exits when the container <SESSION>-core leaves its network.
-Usage: proxy.py PORT HOST[,HOST...] SESSION"""
+Usage: proxy.py PORT HOST[,HOST...] SESSION TRACE_HOST"""
+import calendar
+import ipaddress
+import json
 import os
+import re
 import select
 import socket
 import sys
 import threading
 import time
+import urllib.request
 from urllib.parse import urlsplit
 
-PORT, SESSION = int(sys.argv[1]), sys.argv[3]
-ALLOW = {h.strip().lower() for h in sys.argv[2].split(",") if h.strip()}
+PORT, SESSION, TRACE_HOST, ALLOW = 0, "", "", set()
+BUDGET_FILE = "/budget.log"
+HOUR, BLOCK_TTL, TRACE_TTL, PER_HOUR = 3600, 13 * 3600, 60, 30
+LINE = re.compile(r"(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ) (spend|block) (\S+) (flights-\d+-\d+)")
+ROUTES = {("GET", "/budget"): None, ("POST", "/budget/spend"): "spend", ("POST", "/budget/block"): "block"}
 lock = threading.Lock()
+budget_lock = threading.Lock()
+clock = time.time
+own = []
+measured = [None, 0.0]
 
 
 def log(verdict, target):
     with lock:
         print(f"{time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())} {verdict} {target} {SESSION}", flush=True)
+
+
+def fetch_trace():
+    """The body of the metasearch's trace page, seen from this proxy's egress."""
+    with urllib.request.urlopen(f"https://{TRACE_HOST}/cdn-cgi/trace", timeout=5) as r:
+        return r.read().decode("utf-8", "replace")
+
+
+def trace():
+    """The egress IP as the metasearch sees it, normalized so file lines compare to it, or None if the trace fails."""
+    log("TRACE", f"{TRACE_HOST}:443")
+    try:
+        for line in fetch_trace().splitlines():
+            if line.startswith("ip="):
+                return str(ipaddress.ip_address(line[3:].strip()))
+    except Exception:  # noqa: BLE001 - any failure is a failed trace
+        pass
+    return None
+
+
+def file_lines(ip):
+    """The (time, kind) of other sessions' lines for this IP: our own count from memory, and a last line with no
+    newline is still being written."""
+    try:
+        with open(BUDGET_FILE, encoding="utf-8", errors="replace") as f:
+            lines = f.read().split("\n")[:-1]
+    except OSError:
+        return []
+    found = []
+    for line in lines:
+        m = LINE.fullmatch(line)
+        if not m or m[4] == SESSION:
+            continue
+        try:
+            t = calendar.timegm(time.strptime(m[1], "%Y-%m-%dT%H:%M:%SZ"))
+            if str(ipaddress.ip_address(m[3])) == ip:
+                found.append((t, m[2]))
+        except ValueError:
+            continue
+    return found
+
+
+def status(ip, now):
+    """The reply body for this IP: its spends in the last hour, and its latest block unless a spend came after it."""
+    lines = file_lines(ip) + [(t, kind) for t, kind, i in own if i == ip]
+    spends = [t for t, kind in lines if kind == "spend"]
+    body = {"used_last_hour": sum(1 for t in spends if t > now - HOUR)}
+    blocks = [t for t, kind in lines if kind == "block" and t > now - BLOCK_TTL]
+    if blocks and not any(t > max(blocks) for t in spends):
+        body["blocked_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(max(blocks)))
+    return body
+
+
+def budget(kind):
+    """The (status, body) of one budget route: a GET when kind is None, else a spend or block annotated, rate
+    limited per session and per kind so a looping core cannot flood the shared file nor crowd out its block."""
+    with budget_lock:
+        now = clock()
+        if kind:
+            recent = [t for t, k, _ in own if k == kind and t > now - HOUR]
+            if len(recent) >= PER_HOUR or recent and max(recent) > now - 1:
+                return "429 Too Many Requests", {"error": "too many annotations"}
+        ip = measured[0] if not kind and measured[0] and now - measured[1] < TRACE_TTL else None
+        if not ip:
+            ip = trace()
+            if not ip:
+                return "502 Bad Gateway", {"error": "trace failed"}
+            measured[:] = [ip, now]
+        if kind:
+            own.append((now, kind, ip))
+            with lock:
+                print(f"BUDGET {kind} {ip}", flush=True)
+        return "200 OK", status(ip, now)
+
+
+def reply(client, code, body):
+    data = json.dumps(body).encode()
+    head = f"HTTP/1.1 {code}\r\nContent-Type: application/json\r\nContent-Length: {len(data)}\r\n"
+    client.sendall(head.encode() + b"Connection: close\r\n\r\n" + data)
 
 
 def relay(a, b):
@@ -46,6 +139,9 @@ def handle(client):
             data += chunk
         head, rest = data.split(b"\r\n\r\n", 1)
         method, target, _ = head.split(b"\r\n", 1)[0].decode("latin-1").split(" ", 2)
+        if (method, target) in ROUTES:
+            reply(client, *budget(ROUTES[method, target]))
+            return
         if method != "CONNECT":
             # Plain HTTP: log only the host, the URL may carry the whole search
             log("BLOCK", urlsplit(target).netloc or "?")
@@ -86,12 +182,20 @@ def follow(core):
             os._exit(0)
 
 
-threading.Thread(target=follow, args=(f"{SESSION}-core",), daemon=True).start()
-srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-srv.bind(("0.0.0.0", PORT))
-srv.listen(64)
-print("LISTEN", flush=True)
-while True:
-    conn, _ = srv.accept()
-    threading.Thread(target=handle, args=(conn,), daemon=True).start()
+def main():
+    global PORT, SESSION, TRACE_HOST, ALLOW
+    PORT, SESSION, TRACE_HOST = int(sys.argv[1]), sys.argv[3], sys.argv[4]
+    ALLOW = {h.strip().lower() for h in sys.argv[2].split(",") if h.strip()}
+    threading.Thread(target=follow, args=(f"{SESSION}-core",), daemon=True).start()
+    srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    srv.bind(("0.0.0.0", PORT))
+    srv.listen(64)
+    print("LISTEN", flush=True)
+    while True:
+        conn, _ = srv.accept()
+        threading.Thread(target=handle, args=(conn,), daemon=True).start()
+
+
+if __name__ == "__main__":
+    main()

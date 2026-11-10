@@ -21,7 +21,13 @@ done
 stub() { printf '#!/bin/sh\n%s\n' "$2" > "/tmp/bin/$1" && chmod +x "/tmp/bin/$1"; }
 stub readlink 'case "$1" in -f) echo "readlink: illegal option -- f" >&2; exit 1 ;; esac; exec "$BB" readlink "$@"'
 stub shasum '[ "$1" = -a ] && shift 2; exec "$BB" sha256sum "$@"'
-stub docker 'echo "$*" >> /tmp/docker.log'
+# The budget file's mode when the proxy starts; logs of a dead proxy hold a BUDGET line, which save_log must drop
+stub docker 'echo "$*" >> /tmp/docker.log
+case "$*" in
+  "run -d "*) stat -c %a /tmp/.local/state/flights/metasearch-budget.log >> /tmp/budget-mode ;;
+  "ps -a "*) echo "dead 99999999 proxy" ;;
+  "logs dead") printf "%s\\n" "2026-11-10T12:00:00Z ALLOW www.google.com:443 s" "LISTEN 3128" "BUDGET spend 1.2.3.4" ;;
+esac'
 stub python3 'echo "$*" >> /tmp/python3.log; cat > /dev/null'
 export PATH=/tmp/bin:/usr/local/bin HOME=/tmp
 ln -s /tmp/r/bin/flights /tmp/bin/flights
@@ -42,6 +48,17 @@ logged() {
   false
 }
 logged "^-I /tmp/r/src/letsfly/links.py ensure\$" || fail "no ensure: $(cat /tmp/python3.log)"
+# Created readable by the proxy's user before it starts, mounted read-only, trimmed, and fed by the splitter
+[ "$(cat /tmp/budget-mode)" = 644 ] || fail "budget file mode when the proxy started: $(cat /tmp/budget-mode)"
+mount=type=bind,src=/tmp/.local/state/flights/metasearch-budget.log,dst=/budget.log,readonly
+grep -q "^run -d .* --mount $mount lets-fly-proxy:[0-9a-f]* 3128 [^ ]* flights-[0-9-]* api.turismocity.com\$" /tmp/docker.log ||
+  fail "no read-only budget mount on the proxy: $(cat /tmp/docker.log)"
+logged "^-I /tmp/r/bin/budget.py trim /tmp/.local/state/flights/metasearch-budget.log\$" ||
+  fail "no trim: $(cat /tmp/python3.log)"
+logged "^-I /tmp/r/bin/budget.py split flights-[0-9-]* /tmp/.local/state/flights/metasearch-budget.log\$" ||
+  fail "no split: $(cat /tmp/python3.log)"
+[ "$(cat /tmp/state/flights/egress.log)" = "2026-11-10T12:00:00Z ALLOW www.google.com:443 s" ] ||
+  fail "sweep kept in the egress log: $(cat /tmp/state/flights/egress.log)"
 # One folder for every checkout, which the one link server reads
 logged "^-I /tmp/r/src/letsfly/links.py record /tmp/.local/state/flights/links search-[0-9]*\$" ||
   fail "links recorded elsewhere: $(cat /tmp/python3.log)"

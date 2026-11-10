@@ -1,5 +1,5 @@
 """The error object every tool returns instead of raising. The search's own kinds live next to their code
-(models, client); Kind lists them all because a client may check results against it."""
+(models, client, metasearch); Kind lists them all because a client may check results against it."""
 import sys
 import traceback
 from typing import Annotated, Literal, NotRequired, TypedDict
@@ -7,7 +7,9 @@ from typing import Annotated, Literal, NotRequired, TypedDict
 Kind = Literal["internal", "invalid_arguments", "unknown_tool", "unknown_airport", "city_code", "invalid_input",
                "invalid_request", "google", "google_timeout", "google_connection", "google_certificate", "google_http",
                "google_page", "google_rejected", "no_flights", "no_return_flights", "no_round_trip_fare", "filtered_out",
-               "blog_unavailable", "blog_forbidden", "blog_unreadable"]
+               "blog_unavailable", "blog_forbidden", "blog_unreadable", "metasearch", "metasearch_timeout",
+               "metasearch_connection", "metasearch_certificate", "metasearch_http", "metasearch_page",
+               "metasearch_blocked", "metasearch_challenge"]
 
 
 class Error(TypedDict):

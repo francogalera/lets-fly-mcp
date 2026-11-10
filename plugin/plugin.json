@@ -2,7 +2,7 @@
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "flights",
   "version": "1.0.0",
-  "description": "Searches flights, fares and cheapest travel dates on Google Flights, and deals from Argentina on promociones-aereas.com.ar when asked, isolated in Docker.",
+  "description": "Searches flights, fares and cheapest travel dates on Google Flights and a flight metasearch that compares agencies, and deals from Argentina on promociones-aereas.com.ar when asked, isolated in Docker.",
   "license": "MIT",
   "extensions": {
     "com.openai": {

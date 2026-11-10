@@ -6,7 +6,7 @@ from letsfly import audit, tools
 
 
 def main():
-    cli = argparse.ArgumentParser(prog="flights", description="Searches flights on Google Flights.")
+    cli = argparse.ArgumentParser(prog="flights", description="Searches flights on Google Flights and a metasearch.")
     sub = cli.add_subparsers(dest="command", required=True)
     f = sub.add_parser("search", help="flights on one date, with an optional return")
     f.add_argument("origin"), f.add_argument("destination"), f.add_argument("date")
@@ -18,15 +18,25 @@ def main():
     d.add_argument("--limit", type=int, default=10)
     a = sub.add_parser("airports", help="finds airports by code or name")
     a.add_argument("query")
+    m = sub.add_parser("meta", help="every seller's fares for one trip on the metasearch (spends 1 search)")
+    m.add_argument("origin"), m.add_argument("destination"), m.add_argument("date")
+    m.add_argument("return_date", nargs="?")
+    m.add_argument("--limit", type=int, default=5)
+    md = sub.add_parser("meta-dates", help="lowest fares the metasearch saw, per month or per day (free)")
+    md.add_argument("origin"), md.add_argument("destination")
+    md.add_argument("--month", help="YYYY-MM: per day of that month")
+    md.add_argument("--outbound", help="YYYY-MM-DD: the returns for that departure")
+    md.add_argument("--one-way", dest="one_way", action="store_true")
     u = sub.add_parser("audit", help="live checks of the data against Google: pair prices, dates, a burst, the filters")
     u.add_argument("only", nargs="?", choices=["filters"], help="only whether Google honors the filters")
-    for p in (f, d, a):
+    for p in (f, d, a, m, md):
         p.add_argument("--json", action="store_true", help="the reply exactly as the agent gets it")
     args = vars(cli.parse_args())
     if args["command"] == "audit":
         return audit.main(args["only"])
     command, as_json = args.pop("command"), args.pop("json")
-    out = {"search": tools.search_flights, "dates": tools.cheapest_dates, "airports": tools.find_airports}[command](**args)
+    out = {"search": tools.search_flights, "dates": tools.cheapest_dates, "airports": tools.find_airports,
+           "meta": tools.metasearch_flights, "meta-dates": tools.metasearch_dates}[command](**args)
     if as_json or "error" in out:
         print(json.dumps(out, ensure_ascii=False, indent=1))
         return
@@ -35,12 +45,19 @@ def main():
         print(f"Unknown, their page failed to load: {', '.join(out['missing_dates'])}")
     if out.get("note"):
         print(out["note"])
+    if "budget" in out:
+        budget = out["budget"]
+        whose = "" if budget["shared"] else " (this session only: the proxy could not count the others)"
+        print(f"Cost: {out['cost']} search; {budget['used_last_hour']} of {budget['safe_per_hour']} in the last hour{whose}")
+        if budget.get("warning"):
+            print(f"Warning: {budget['warning']}")
 
 
 def _flights(out):
     for row in out["flights"]:
         price = f"{out['currency']} {row['price']:.0f}" if row["price"] is not None else "price unknown"
-        yield f"{price}  {row['airlines']}" + ("  (separate tickets)" if row.get("self_transfer") else "")
+        seller = f"  from {row['sellers'][0]['name']}" if row.get("sellers") else ""
+        yield f"{price}  {row['airlines']}{seller}" + ("  (separate tickets)" if row.get("self_transfer") else "")
         for leg in (row["out"], row.get("back")):
             if leg:
                 stops = ", ".join(f"{x['airport']} {x['minutes'] // 60}h{x['minutes'] % 60:02d}" for x in leg["layovers"])
@@ -59,7 +76,13 @@ def _airports(out):
         yield f"{a['code']}  {a['name']}"
 
 
-TEXT = {"search": _flights, "dates": _dates, "airports": _airports}
+def _seen(out):
+    for row in out["prices"]:
+        yield f"{row.get('date') or row['month']}  {out['currency']} {row['price']:.0f}" + ("  low" if row.get("low") else "")
+    yield out["seen"]
+
+
+TEXT = {"search": _flights, "dates": _dates, "airports": _airports, "meta": _flights, "meta-dates": _seen}
 
 if __name__ == "__main__":
     main()
