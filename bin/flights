@@ -19,7 +19,7 @@ if command -v sha256sum >/dev/null; then SHA=(sha256sum); else SHA=(shasum -a 25
 IMAGE="lets-fly-core:$(cd "$HERE" && find src/letsfly docker -type f ! -path '*/__pycache__/*' -print0 | LC_ALL=C sort -z |
   xargs -0 "${SHA[@]}" | "${SHA[@]}" | cut -c1-12)"
 PROXY_IMAGE="lets-fly-proxy:$("${SHA[@]}" "$HERE/docker/proxy.py" | cut -c1-12)"
-ALLOW=www.google.com,promociones-aereas.com.ar
+ALLOW=www.google.com,promociones-aereas.com.ar,api.turismocity.com
 LOG="${XDG_STATE_HOME:-$HOME/.local/state}/flights/egress.log"
 # Not XDG_STATE_HOME: the service and some clients start without it, and every caller must find the same folder
 LINKS="$HOME/.local/state/flights/links"
@@ -35,6 +35,8 @@ usage: flights COMMAND [ARGS]
   search ORIGIN DESTINATION DATE [RETURN]      flights on one date, cheapest first
   dates ORIGIN DESTINATION START END [DAYS]    lowest price per departure date
   airports QUERY                               airports by code, city or name
+  meta ORIGIN DESTINATION DATE [RETURN]        every seller's fares on the metasearch (spends 1 search)
+  meta-dates ORIGIN DESTINATION [--month M]    lowest fares the metasearch saw, per month or day (free)
   audit [filters]                              live data checks: pair prices, dates, a burst, the filters
   mcp                                          the MCP server over stdio, for the flights agent
   links                                        the link server, which runs as a service of the user
@@ -46,7 +48,7 @@ usage: flights COMMAND [ARGS]
   test                                         offline tests in the image, this script on bash 3.2, --from with git
   selftest                                     live check: searches, filters, MCP, network blocking, cleanup
 
-search, dates and airports take --json (the reply as the agent gets it); COMMAND --help shows the rest.
+search, dates, airports, meta and meta-dates take --json (the reply as the agent gets it); COMMAND --help shows the rest.
 USAGE
 }
 

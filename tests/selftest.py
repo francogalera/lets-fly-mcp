@@ -22,8 +22,12 @@ DAY = datetime.date.today() + datetime.timedelta(days=45)
 DATE, RETURN, RANGE_END = (DAY + datetime.timedelta(days=n) for n in (0, 10, 4))
 DATE, RETURN, RANGE_END = DATE.isoformat(), RETURN.isoformat(), RANGE_END.isoformat()
 ROUTE = ("EZE", "GRU")
-EXPECTED_EGRESS = {"ALLOW www.google.com:443", "ALLOW promociones-aereas.com.ar:443",
-                   "BLOCK example.com:443"}  # the test itself causes the last one
+# What the proxy lets through, read from the launcher's ALLOW; the test itself causes the BLOCK
+with open(LAUNCHER) as f:
+    ALLOWED = re.search(r"^ALLOW=(\S+)$", f.read(), re.M).group(1).split(",")
+EXPECTED_EGRESS = {f"ALLOW {host}:443" for host in ALLOWED} | {"BLOCK example.com:443"}
+# An external limit, not a broken build: the metasearch can refuse a shared IP, as CI runners have
+LIMITS = {"metasearch_blocked", "metasearch_challenge"}
 failures, pids = [], []
 
 
@@ -142,6 +146,33 @@ def live_filters(mcp, schema):
     check("MCP: codeshares rows have the shape of flights rows", not found, "; ".join(found[:3]))
 
 
+def live_metasearch(mcp, schemas):
+    """One expensive search, the same one again from the cache, and the free dates."""
+    def call(name, arguments):
+        res = mcp.call("tools/call", {"name": name, "arguments": arguments})["result"]
+        return res, res.get("structuredContent") or json.loads(res["content"][0]["text"])
+
+    trip = {"origin": ROUTE[0], "destination": ROUTE[1], "date": DATE, "return_date": RETURN}
+    res, data = call("metasearch_flights", trip)
+    kind = data.get("error", {}).get("type")
+    if kind in LIMITS:
+        print(f"  skip MCP: metasearch_flights, {kind}: {problem(data)}", flush=True)
+        return
+    rows = data.get("flights", [])
+    check("MCP: metasearch_flights round trip, with sellers, spending 1 search",
+          bool(rows) and all(r.get("sellers") and "back" in r for r in rows) and data.get("cost") == 1
+          and data.get("budget", {}).get("used_last_hour", 0) >= 1,
+          f"{len(rows)} options from USD {rows[0]['price']:.0f}, {rows[0]['sellers'][0]['name']}" if rows else problem(data))
+    fits("metasearch_flights", schemas.get("metasearch_flights"), res)
+    _, again = call("metasearch_flights", trip | {"max_stops": "ONE_STOP"})
+    check("MCP: metasearch_flights again within 15 minutes costs nothing", again.get("cost") == 0,
+          f"cost {again.get('cost')}" if "cost" in again else problem(again))
+    res, data = call("metasearch_dates", {"origin": ROUTE[0], "destination": ROUTE[1]})
+    check("MCP: metasearch_dates per month, free", "prices" in data and "cost" not in data,
+          f"{data.get('count')} months" if "prices" in data else problem(data))
+    fits("metasearch_dates", schemas.get("metasearch_dates"), res)
+
+
 def google_honors_filters():
     """Runs inside the core because over the MCP search._keep hides a field Google stopped honoring."""
     audit = subprocess.Popen([LAUNCHER, "audit", "filters"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
@@ -201,8 +232,9 @@ def main():
     try:
         mcp.start()
         schemas = {t["name"]: t.get("outputSchema") for t in mcp.call("tools/list")["result"]["tools"]}
-        need = {"search_flights", "cheapest_dates", "find_airports", "promociones-aereas"}
-        check("MCP: clean output and the 4 tools", set(schemas) == need, ", ".join(sorted(schemas)))
+        need = {"search_flights", "cheapest_dates", "find_airports", "promociones-aereas", "metasearch_flights",
+                "metasearch_dates"}
+        check("MCP: clean output and the 6 tools", set(schemas) == need, ", ".join(sorted(schemas)))
         res = mcp.call("tools/call", {"name": "search_flights", "arguments": {
             "origin": ROUTE[0], "destination": ROUTE[1], "date": DATE, "return_date": RETURN}})["result"]
         text = res["content"][0]["text"]
@@ -224,6 +256,7 @@ def main():
         check("MCP: cheapest_dates", bool(data.get("dates")), f"{len(data.get('dates', []))} dates" if data.get("dates")
               else problem(data))
         fits("cheapest_dates", schemas.get("cheapest_dates"), res)
+        live_metasearch(mcp, schemas)
         res = mcp.call("tools/call", {"name": "promociones-aereas", "arguments": {"limit": 5, "details": False}})["result"]
         text = res["content"][0]["text"]
         deals = json.loads(text).get("deals", [])

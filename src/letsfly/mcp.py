@@ -17,6 +17,9 @@ from letsfly import errors
 PROTOCOL = "2025-06-18"
 READ_ONLY = {"readOnlyHint": True, "idempotentHint": True}
 TYPES = {str: "string", int: "integer", bool: "boolean", float: "number", type(None): "null", dict: "object"}
+# What a call spends beyond time, said at the end of the tool's description so the agent plans with it
+COSTS = {"expensive": "EXPENSIVE: each call spends 1 search of an hourly budget per IP; the reply carries cost and "
+                      "budget. Never call it twice for the same search."}
 _tools = {}
 _instructions = None
 _out = threading.Lock()
@@ -28,7 +31,8 @@ class Range:
     le: int | None = None
 
 
-def tool(name=None):
+def tool(name=None, cost=None):
+    """Registers fn as a tool; cost (a key of COSTS) adds its line to the description."""
     def register(fn):
         @functools.wraps(fn)
         def call(*args, **kwargs):
@@ -36,7 +40,8 @@ def tool(name=None):
                 return fn(*args, **kwargs)
             except Exception as e:  # noqa: BLE001 - the agent gets the error as an object instead of an exception
                 return errors.result(e)
-        _tools[name or fn.__name__] = (call, _input_schema(fn), _output_schema(fn))
+        description = (inspect.getdoc(fn) or "") + (f"\n{COSTS[cost]}" if cost else "")
+        _tools[name or fn.__name__] = (call, _input_schema(fn), _output_schema(fn), description)
         return call
     return register
 
@@ -133,7 +138,7 @@ def _call(params):
     name, args = params.get("name"), params.get("arguments") or {}
     if name not in _tools:
         return _reply(errors.result(errors.UnknownTool(f"Unknown tool {name}", "name")))
-    fn, schema, _ = _tools[name]
+    fn, schema, *_ = _tools[name]
     found = problems(args, schema)
     if found:
         message = "Invalid arguments: " + "; ".join(text for _, text in found)
@@ -154,9 +159,9 @@ def _handle(msg):
     if method == "ping":
         return {}
     if method == "tools/list":
-        return {"tools": [{"name": n, "description": inspect.getdoc(fn) or "", "inputSchema": inputs,
-                           "outputSchema": outputs, "annotations": READ_ONLY}
-                          for n, (fn, inputs, outputs) in _tools.items()]}
+        return {"tools": [{"name": n, "description": description, "inputSchema": inputs, "outputSchema": outputs,
+                           "annotations": READ_ONLY}
+                          for n, (_, inputs, outputs, description) in _tools.items()]}
     if method == "tools/call":
         return _call(params)
     raise LookupError(method)

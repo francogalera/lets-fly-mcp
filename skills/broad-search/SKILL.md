@@ -26,6 +26,8 @@ For the itinerary, when the trip moves around or the user asks for it:
 
 Judgment, not rules: discard itineraries that glue an unknown or unlikely carrier onto a short hop, which is usually bad data, and say so. Flag self_transfer, change_of_airport, overnight layovers and fares whose bags show no carry-on.
 
+metasearch_dates is free: use it with cheapest_dates to pick months and days. metasearch_flights is EXPENSIVE: only at the end, at most once per final candidate and 3 in all, to compare its sellers with Google's fare.
+
 price_reference belongs to one search: its numbers don't compare across routes or dates. Use it to say whether the price you picked is unusual for its own route.
 
 Report a short list ranked as the agent prompt's "Done when" says: price, which strategy produced it, route and airlines, dates, the caveat that matters, and the link. End with the one option you would pick and why.
