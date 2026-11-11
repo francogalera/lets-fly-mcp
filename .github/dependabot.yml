@@ -1,0 +1,14 @@
+version: 2
+updates:
+  - package-ecosystem: pip
+    directory: /docker
+    schedule:
+      interval: weekly
+  - package-ecosystem: docker
+    directory: /docker
+    schedule:
+      interval: weekly
+    ignore:
+      # The Dockerfile puts letsfly in python3.12's site-packages
+      - dependency-name: python
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
