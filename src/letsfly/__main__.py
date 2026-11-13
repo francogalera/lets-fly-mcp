@@ -57,7 +57,7 @@ def main():
 def _flights(out):
     for row in out["flights"]:
         price = f"{out['currency']} {row['price']:.0f}" if row["price"] is not None else "price unknown"
-        seller = f"  from {row['sellers'][0]['name']}" if row.get("sellers") else ""
+        seller = f"  from {row['seller']}" if row.get("seller") else ""
         yield f"{price}  {row['airlines']}{seller}" + ("  (separate tickets)" if row.get("self_transfer") else "")
         for leg in (row["out"], row.get("back")):
             if leg:

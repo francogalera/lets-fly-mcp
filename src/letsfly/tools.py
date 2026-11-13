@@ -17,9 +17,9 @@ INSTRUCTIONS = (
     "Use only airport codes find_airports returned or a flight tool accepted. Call promociones-aereas only when the "
     "user asks for deals or packages and names an origin in Argentina, with no flight tool: it reads a blog at about "
     "5 s per request, so list with details=false first, then read at most 3 deals. Answer in the language of the "
-    "request, best option first, with its price, bags, route, times and link.\n"
-    "metasearch_flights is EXPENSIVE: explore with the free tools, then call it once per request on the chosen trip "
-    "to compare its sellers with Google."
+    "request, cheapest option first (a nonstop or single ticket up to 10% dearer may lead, saying why), with its "
+    "price, bags, route, times and link.\n"
+    "metasearch_flights is EXPENSIVE: explore with the free tools, then call it once per request on the chosen trip."
 )
 
 Airports = Annotated[str, "IATA code, or several separated by commas (EZE,AEP)"]
@@ -49,8 +49,8 @@ class Direction(TypedDict):
 
 
 class Bags(TypedDict):
-    carry_on: Annotated[int | None, "Carry-on bags included; null when Google does not say"]
-    checked: Annotated[int | None, "Checked bags included; null when Google does not say"]
+    carry_on: Annotated[int | None, "Carry-on bags included; null when not reported"]
+    checked: Annotated[int | None, "Checked bags included; null when not reported"]
 
 
 class Flight(TypedDict):
@@ -62,7 +62,7 @@ class Flight(TypedDict):
     price_estimated: NotRequired[Annotated[bool, "The pair had no quote, so price is the outbound's"]]
     price_other_seller: NotRequired[Annotated[bool, "The price comes from the search without airlines, maybe another seller's"]]
     self_transfer: NotRequired[Annotated[bool, "Separate tickets: a missed connection is the traveller's problem"]]
-    link: NotRequired[Annotated[str, "Short local link to this row's booking page on Google Flights"]]
+    link: NotRequired[Annotated[str, "Short local link to this row's booking page"]]
 
 
 PriceHistory = TypedDict("PriceHistory", {
@@ -75,10 +75,10 @@ PriceHistory = TypedDict("PriceHistory", {
 
 class PriceReference(TypedDict):
     lowest: Annotated[float | None, "Lowest fare, whatever airlines and windows say; a round trip row can come below it"]
-    typical: Annotated[float | None, "What Google considers a typical fare for this search"]
+    typical: Annotated[float | None, "A typical fare for this search"]
     low: Annotated[float | None, "Bottom of the typical range"]
     high: Annotated[float | None, "Top of the typical range"]
-    history: Annotated[PriceHistory | None, "How lowest moved; null when Google gives none, as with over 1 adult or in first class"]
+    history: Annotated[PriceHistory | None, "How lowest moved; null when there is none, as with over 1 adult or in first class"]
 
 
 class FlightsResult(TypedDict):
@@ -88,7 +88,7 @@ class FlightsResult(TypedDict):
     codeshares: NotRequired[Annotated[list[dict], "Up to 3 rows like flights', with a partner's flight the airlines asked for also sell"]]
     codeshares_total: NotRequired[Annotated[int, "How many such rows the search found"]]
     note: NotRequired[Annotated[str, "Why some round trips are missing"]]
-    price_reference: NotRequired[Annotated[PriceReference, "Google's reference; missing if it gives none"]]
+    price_reference: NotRequired[Annotated[PriceReference, "The price reference of this search; missing when there is none"]]
 
 
 DateRow = TypedDict("DateRow", {
@@ -176,11 +176,6 @@ class NextLeg(TypedDict):
     date: Day
 
 
-class Seller(TypedDict):
-    name: Annotated[str, "Agency or airline that sells it"]
-    price: Annotated[float, "Its price for all adults"]
-
-
 class MetaBags(TypedDict):
     carry_on: Annotated[int | None, "1 when the fare includes a carry-on on every flight, 0 when not, null when unknown"]
     checked: Annotated[int | None, "1 when the fare includes a checked bag on every flight, 0 when not, null when unknown"]
@@ -193,8 +188,7 @@ class MetaFlight(TypedDict):
     out: Annotated[Direction, "First leg"]
     back: NotRequired[Annotated[Direction, "Return, or the second leg of a multi-city trip"]]
     more: NotRequired[Annotated[list[Direction], "Legs after the second, on a multi-city trip"]]
-    sellers: Annotated[list[Seller], "The 3 cheapest sellers of this itinerary, cheapest first"]
-    sellers_total: Annotated[int, "How many sellers price it"]
+    seller: Annotated[str, "Agency or airline whose site the link books at this price, the cheapest that sells it"]
     bag_fee: NotRequired[Annotated[Fee, "Checked bags"]]
     changes: NotRequired[Annotated[Fee, "Changing the dates"]]
     refunds: NotRequired[Annotated[Fee, "A refund"]]
@@ -337,7 +331,7 @@ def search_flights(
 ) -> FlightsResult:
     """Flights on one date, or round trips with return_date: the cheapest of each distinct outbound first, then by
     price. price: for all adults, on a round trip for the pair (price_estimated: the outbound's; price_other_seller:
-    maybe not the airline's, say so). null bags: Google does not say. self_transfer: separate tickets. AEP/EZE in route
+    maybe not the airline's, say so). null bags: not reported. self_transfer: separate tickets. AEP/EZE in route
     and change_of_airport: the next leg leaves from another airport. overnight: touches 00:00 to 05:00. operated_by: who
     flies a leg when not the seller. codeshares: up to 3 rows with a partner's flight the airlines also sell (number in
     sold_as): always mention them, apart. price_reference ignores airlines and hours: lowest (a pair can beat it),
@@ -401,7 +395,7 @@ def cheapest_dates(
     if missing:
         out["missing_dates"] = missing
     elif not rows:
-        out["note"] = "Every page loaded and Google has no fares for these dates"
+        out["note"] = "Every page loaded and none had fares for these dates"
     return out
 
 
@@ -422,8 +416,8 @@ def metasearch_flights(
     limit: Annotated[int, Range(1, 20)] = 5,
 ) -> MetaFlightsResult:
     """Live fares of every seller (agencies and airlines) for one trip: one way, round trip, or multi-city with
-    next_legs; compare with search_flights. price: total for all adults from the cheapest seller (its site may show it
-    per person); sellers: the 3 cheapest. bags 1 included, 0 not, null unknown; bag_fee, changes, refunds: included or
+    next_legs. price: total for all adults at the cheapest seller, whose site the link books (it may show
+    the price per person). bags 1 included, 0 not, null unknown; bag_fee, changes, refunds: included or
     the fee, missing when unknown. self_transfer: separate tickets. summary: lowest per airline and stops, and the
     index in flights of the cheapest nonstop, single ticket, with carry-on, with checked bag, and the fastest.
     price_reference, some economy round trips: 90-day daily average per adult. Filters apply to the whole result:
@@ -522,7 +516,7 @@ def _meta_row(offer):
     names = [leg.airline_name for d in offer.directions for leg in d.legs]
     row = {"price": offer.price, "airlines": ", ".join(dict.fromkeys(names)),
            "bags": {"carry_on": offer.carry_on, "checked": offer.checked}, "out": _direction(first),
-           "sellers": [{"name": n, "price": p} for n, p in offer.sellers[:3]], "sellers_total": len(offer.sellers)}
+           "seller": offer.sellers[0][0]}
     row |= {name: fee for name, fee in (("bag_fee", offer.bag_fee), ("changes", offer.changes),
                                         ("refunds", offer.refunds)) if fee is not None}
     if rest:

@@ -327,12 +327,12 @@ class FlightsTool(Base):
         return tools.metasearch_flights(**({"origin": "EZE", "destination": "MAD", "date": "2027-04-14",
                                             "return_date": "2027-04-28"} | arguments))
 
-    def test_rows_go_by_price_with_their_sellers_bags_fees_and_links(self):
+    def test_rows_go_by_price_with_one_seller_bags_fees_and_links(self):
         out = self.run_tool()
         glued, operated, nonstop = out["flights"]
         self.assertEqual([r["price"] for r in out["flights"]], [800.25, 950.0, 1100.0])
-        self.assertEqual(nonstop["sellers"], [{"name": "Iberia", "price": 1100.0}, {"name": "Agency A", "price": 1150.5}])
-        self.assertEqual((nonstop["sellers_total"], nonstop["bags"]), (2, {"carry_on": 1, "checked": 1}))
+        self.assertEqual((nonstop["seller"], nonstop["bags"]), ("Iberia", {"carry_on": 1, "checked": 1}))
+        self.assertFalse({"sellers", "sellers_total"} & nonstop.keys())
         self.assertEqual((nonstop["bag_fee"], nonstop["changes"], nonstop["refunds"]), ("included", 150.0, "included"))
         self.assertEqual((glued["bag_fee"], glued["changes"]), (120.0, 95.5))
         self.assertNotIn("refunds", glued)

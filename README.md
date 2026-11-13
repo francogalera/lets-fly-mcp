@@ -24,7 +24,7 @@ Or ask a new agent session for flights in plain words: the `flights` subagent se
 - `search_flights`: flights on a date, or round trips, cheapest first, with bags, layovers (overnight, airport changes) and self-transfers.
 - `cheapest_dates`: the lowest fare per departure date, up to 93 dates.
 - `find_airports`: airports by code, city (Spanish names too) or name; a city code lists all its airports.
-- `metasearch_flights`: every seller's live fares for one trip (one way, round trip or multi-city), with the 3 cheapest sellers per itinerary, bag, change and refund fees, and a summary per airline and stops. Each call spends 1 search, counted across every session on this machine's IP, and the reply warns to ask first when another one could get the IP blocked.
+- `metasearch_flights`: every seller's live fares for one trip (one way, round trip or multi-city), with one price per itinerary from its cheapest seller, bag, change and refund fees, and a summary per airline and stops. Each call spends 1 search, counted across every session on this machine's IP, and the reply warns to ask first when another one could get the IP blocked.
 - `metasearch_dates`: the lowest fares the metasearch saw, per month or per day, for free.
 - `promociones-aereas`: the deals on promociones-aereas.com.ar (flights, packages, hotels), with their dates and links.
 

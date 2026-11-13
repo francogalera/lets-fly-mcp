@@ -162,10 +162,10 @@ def live_metasearch(mcp, schemas):
         print(f"  skip MCP: metasearch_flights, {kind}: {problem(data)}", flush=True)
         return
     rows = data.get("flights", [])
-    check("MCP: metasearch_flights round trip, with sellers, spending 1 search",
-          bool(rows) and all(r.get("sellers") and "back" in r for r in rows) and data.get("cost") == 1
+    check("MCP: metasearch_flights round trip, with a seller per row, spending 1 search",
+          bool(rows) and all(r.get("seller") and "back" in r for r in rows) and data.get("cost") == 1
           and data.get("budget", {}).get("used_last_hour", 0) >= 1 and data["budget"].get("shared") is True,
-          f"{len(rows)} options from USD {rows[0]['price']:.0f}, {rows[0]['sellers'][0]['name']}" if rows else problem(data))
+          f"{len(rows)} options from USD {rows[0]['price']:.0f}, {rows[0]['seller']}" if rows else problem(data))
     fits("metasearch_flights", schemas.get("metasearch_flights"), res)
     _, again = call("metasearch_flights", trip | {"max_stops": "ONE_STOP"})
     check("MCP: metasearch_flights again within 15 minutes costs nothing", again.get("cost") == 0,
