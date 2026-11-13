@@ -17,7 +17,7 @@ from letsfly import errors
 PROTOCOL = "2025-06-18"
 READ_ONLY = {"readOnlyHint": True, "idempotentHint": True}
 TYPES = {str: "string", int: "integer", bool: "boolean", float: "number", type(None): "null", dict: "object"}
-# What a call spends beyond time, said at the end of the tool's description so the agent plans with it
+# Appended to the tool's description, so the agent plans with it
 COSTS = {"expensive": "EXPENSIVE: each call spends 1 search from this IP, which the metasearch can block for hours; "
                       "the reply carries cost and budget. Never call it twice for the same search."}
 _tools = {}

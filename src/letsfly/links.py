@@ -1,9 +1,6 @@
-"""Short links: the tools hand out http://127.0.0.1:18375/<id> instead of booking links of ~300 characters, which
-the agent altered when copying them and which filled answers with several flights. The id is the hash of the url,
-so an id can only open its own url.
-The core prints "LINK <id> <url>" on stderr. On the host, `links.py record` appends each one to the file of its
-session, and `links.py serve`, a service of the user, redirects each id to its url.
-Standard library only, and Python 3.9 as macOS ships it: bin/flights also runs this file on the host."""
+"""Short links http://127.0.0.1:18375/<id> in place of ~300-character booking links, which the agent altered when
+copying. The id is the url's hash. The core prints "LINK <id> <url>" on stderr; on the host, `links.py record` keeps
+them per session and `links.py serve` redirects. Python 3.9 and the standard library: the host runs it too."""
 import base64
 import hashlib
 import http.server

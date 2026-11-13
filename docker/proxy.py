@@ -1,10 +1,8 @@
 #!/usr/bin/env python3
-"""Egress proxy for flights, the only way out of the core's network: lets HTTPS through only to the allowed hosts
-and logs each attempt to stdout as `UTC-datetime ALLOW|BLOCK|ERROR|TRACE host:port session` for bin/flights to
-collect. Also answers the budget routes over plain HTTP, counting the metasearch searches, blocks and GraphQL queries
-of every session on the egress IP from the shared file plus its own, and prints each accepted one as
-`BUDGET KIND IP` for bin/flights to append. Exits when the container <SESSION>-core leaves its network.
-Usage: proxy.py PORT HOST[,HOST...] SESSION TRACE_HOST"""
+"""Egress proxy, the core's only way out: HTTPS to the allowed hosts only, each attempt logged to stdout as
+`UTC-datetime ALLOW|BLOCK|ERROR|TRACE host:port session`. Also answers the metasearch budget routes over plain HTTP,
+from the shared file plus its own annotations, each printed as `BUDGET KIND IP` for bin/flights. Exits when
+<SESSION>-core leaves its network. Usage: proxy.py PORT HOST[,HOST...] SESSION TRACE_HOST"""
 import calendar
 import ipaddress
 import json
@@ -109,8 +107,8 @@ def streak(lines, now):
 
 
 def budget(kind):
-    """The (status, body) of one budget route: a GET when kind is None, else a spend or block annotated, rate
-    limited per session and per kind so a looping core cannot flood the shared file nor crowd out its block."""
+    """The (status, body) of one budget route: a GET when kind is None, else an annotation, rate limited per kind so a
+    looping core cannot flood the shared file nor crowd out its block."""
     with budget_lock:
         now = clock()
         if kind:

@@ -1,8 +1,6 @@
-"""The flight metasearch: one search asks every seller at once and returns all their itineraries. The API limits
-searches per IP and answers more with a block of hours, so a search is expensive, while its polls, its pull and its
-GraphQL (dates and price history) are free. The host is named here and in bin/flights only.
-Flow, as the web client runs it: the results page's GraphQL query, search, meta every EVERY s until version is
-"final", one pull of the whole result."""
+"""The flight metasearch: one search asks every seller at once. Searches are expensive, since the API limits them per
+IP; polls, pulls and GraphQL are free. The host is named here and in bin/flights only.
+Flow, as the web runs it: the results page's query, search, meta every EVERY s until "final", one pull."""
 import base64
 import binascii
 import http.client
@@ -125,10 +123,9 @@ def key(legs):
 
 
 def search(legs, adults, cabin, round_trip=False):
-    """The result's offers and the search's cost: 0 when the same search ran in the last CACHE_FOR, else 1.
-    complete is False when meta did not reach final within POLLS: the slowest sellers are missing. history is a round
-    trip's 90-day average fare by day, or None. An empty result is not kept: the metasearch sometimes answers final
-    with no itineraries for minutes, for a trip it sells. round_trip: the two legs were asked as one round trip."""
+    """The result and its cost: 0 when the same search ran in the last CACHE_FOR, else 1. complete: meta reached final
+    within POLLS. history: a round trip's 90-day average fare by day, or None. An empty result is not kept: the
+    metasearch sometimes answers empty for minutes."""
     k = (key(legs), adults, cabin)
     vars(_local).pop("spend", None)
     with _searching:
@@ -190,9 +187,8 @@ def _days(rows):
 
 
 def budget():
-    """The IP's running streak, as the proxy counts it across sessions, against SAFE_STREAK, with its searches of the
-    last hour, its live block and a warning when the streak or the block calls for asking the user first. Without the
-    proxy, this session's own, shared False. Takes the reply search() kept, else asks the proxy once."""
+    """The IP's streak and block across sessions, from the proxy, with a warning when either calls for asking the user
+    first; without the proxy, this session's own. Takes the reply search() kept, else asks the proxy once."""
     kept = vars(_local).pop("spend", None)
     reply = kept[0] if kept else _proxy("GET", "/budget")
     if reply:
@@ -260,8 +256,8 @@ def months(origin, destination, round_trip):
 
 
 def _graph(field):
-    """The rows of one GraphQL field, aliased r. The query goes in the URL, as the web client sends it, so the CDN can
-    keep it a minute; every value in it was validated before."""
+    """The rows of one GraphQL field, aliased r, with the query in the URL as the web sends it; its values were
+    validated before."""
     data = _get("/graphql-cdn", {"query": f"query {{ r: {field} }}"}, {"device": "desktop"})
     rows = (data.get("data") or {}).get("r") if isinstance(data, dict) else None
     if not isinstance(rows, list) or data.get("errors"):
@@ -393,8 +389,8 @@ def _link(encoded):
 
 
 def _get(path, params, headers=None, timeout=TIMEOUT):
-    """GET one API path and return its JSON; a block, a challenge or a refusal raises its own error. After a block,
-    this session asks nothing more: the API refuses the whole IP for hours, and another try only prolongs it."""
+    """GET one API path and return its JSON; a block, a challenge or a refusal raises its own error. After a block
+    this session asks nothing more: another try only prolongs it."""
     if _blocked[0]:
         raise MetasearchBlocked(f"The metasearch blocked this IP at {_blocked[0]:%H:%M} UTC", hint=BLOCKED_HINT)
     try:
@@ -425,9 +421,8 @@ def _get(path, params, headers=None, timeout=TIMEOUT):
 
 
 def _proxy(method, path):
-    """The proxy's budget for this IP, {"used_last_hour", maybe the streak's "streak_started_at", "streak_seconds" and
-    "streak_resets_in", maybe "blocked_at"}, or None when it cannot give one. Plain HTTP to the proxy itself:
-    http.client reads no proxy env, so HTTP_PROXY does not route it elsewhere."""
+    """The proxy's budget reply for this IP, or None when it cannot give one. http.client reads no proxy env, so
+    HTTP_PROXY does not route it elsewhere."""
     try:
         connection = http.client.HTTPConnection("proxy", 3128, timeout=10)
         try:

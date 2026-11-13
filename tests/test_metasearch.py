@@ -384,6 +384,7 @@ class FlightsTool(Base):
         error = self.run_tool()["error"]
         self.assertEqual(error["type"], "no_flights")
         self.assertIn("sometimes answers empty", error["hint"])
+        self.assertIn("spends 1 more search", error["hint"])
 
     def test_the_90_day_history_is_economy_only(self):
         self.serve(fake.Session(graph={"statsLast90": [{"avg_price": 900, "created": "2026-09-01"}]}))
