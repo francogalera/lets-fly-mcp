@@ -235,10 +235,12 @@ MetaReference = TypedDict("MetaReference", {
 
 class Budget(TypedDict):
     used_last_hour: Annotated[int, "Metasearch searches from this IP in the last hour by every session on it; only this session's when shared is false"]
-    safe_per_hour: Annotated[int, "The most that never got an IP blocked; past it the metasearch may refuse this IP for hours"]
-    shared: Annotated[bool, "True when used_last_hour counts every session on this IP, false when the proxy could not count and it is this session's alone"]
+    streak_started_at: NotRequired[Annotated[str, "First search of this IP's running streak, YYYY-MM-DDTHH:MM:SSZ; missing with no streak"]]
+    streak_seconds: Annotated[int, "Seconds since streak_started_at, 0 with no streak; past safe_streak_seconds the metasearch may block the IP for hours"]
+    safe_streak_seconds: Annotated[int, "The streak after which another search needs the user's go-ahead"]
+    shared: Annotated[bool, "True when the counts cover every session on this IP, false when the proxy could not count and they are this session's alone"]
     blocked_at: NotRequired[Annotated[str, "When the metasearch blocked this IP, YYYY-MM-DDTHH:MM:SSZ, while the block may still hold"]]
-    warning: NotRequired[Annotated[str, "Present at safe_per_hour or with blocked_at: another search may get the IP blocked, or extend the block, for hours. Ask the user before another one"]]
+    warning: NotRequired[Annotated[str, "Present at safe_streak_seconds or with blocked_at: another search may get the IP blocked, or extend the block, for hours. Ask the user before another one"]]
 
 
 class MetaFlightsResult(TypedDict):
@@ -249,7 +251,7 @@ class MetaFlightsResult(TypedDict):
     price_reference: NotRequired[Annotated[MetaReference, "Daily average fare of the last 90 days per adult in economy, from other users' searches: compare it with price / adults. Only some economy round trips have it"]]
     note: NotRequired[Annotated[str, "Some sellers had not answered: a few fares may be missing"]]
     cost: Annotated[int, "Searches this call spent: 1, or 0 when the same search ran in the last 15 minutes"]
-    budget: Annotated[Budget, "Metasearch searches spent against the hourly limit"]
+    budget: Annotated[Budget, "This IP's metasearch searches and their running streak"]
 
 
 class SeenPrice(TypedDict):
@@ -437,7 +439,7 @@ def metasearch_flights(
     hours, back_hours = params.departure_window(departure_window), params.departure_window(return_window, "return_window")
     if back_hours and not return_date:
         raise ValidationError("The return window needs a return date", "return_window")
-    result, cost = metasearch.search(legs, adults, cabin)
+    result, cost = metasearch.search(legs, adults, cabin, round_trip=bool(return_date))
     if not result["offers"]:
         raise search.NoFlights(f"The metasearch has no flights for {metasearch.key(legs)} ({cost} search spent)", "date",
                                "It sometimes answers empty for minutes on a trip it sells: if search_flights finds "
@@ -455,7 +457,7 @@ def metasearch_flights(
            "summary": {"by_airline": _by_airline(result["matrix"]), **summary}}
     if not result["complete"]:
         out["note"] = "Some sellers had not answered after 30 s, so a few fares may be missing"
-    if return_date and cabin == "ECONOMY" and (reference := _meta_reference(legs)):
+    if cabin == "ECONOMY" and (reference := _meta_reference(result["history"])):
         out["price_reference"] = reference
     return out | {"cost": cost, "budget": metasearch.budget()}
 
@@ -558,12 +560,8 @@ def _by_airline(matrix):
     return sorted(rows, key=lambda r: r["lowest"])[:SUMMARY_AIRLINES]
 
 
-def _meta_reference(legs):
-    """The 90-day history of a round trip, or None: it is free and optional, so its failure never fails the search."""
-    try:
-        days = metasearch.history(legs[0][0], legs[0][1], legs[0][2], legs[1][2])
-    except metasearch.MetasearchError:
-        return None
+def _meta_reference(days):
+    """The summary of a round trip's 90-day history, or None when the search brought none."""
     if not days:
         return None
     prices = [p for _, p in days]

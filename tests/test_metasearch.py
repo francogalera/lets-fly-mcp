@@ -27,6 +27,7 @@ class Base(unittest.TestCase):
         models.now = lambda: self.clock[0]
         metasearch._cache.clear()
         metasearch._spent.clear()
+        metasearch._graphed.clear()
         metasearch._blocked[0] = None
         self.serve(fake.Session())
 
@@ -35,6 +36,7 @@ class Base(unittest.TestCase):
         vars(metasearch._local).pop("spend", None)
         metasearch._cache.clear()
         metasearch._spent.clear()
+        metasearch._graphed.clear()
         metasearch._blocked[0] = None
 
     def serve(self, session):
@@ -43,6 +45,9 @@ class Base(unittest.TestCase):
 
     def paths(self):
         return [path for path, _ in self.session.calls]
+
+    def searched(self):
+        return next(params for path, params in self.session.calls if path == "/flights/search")
 
     def proxy(self, method, path):
         self.proxied.append((method, path))
@@ -56,11 +61,12 @@ class Search(Base):
     def test_it_polls_meta_every_3_s_until_final_then_pulls_once(self):
         result, cost = metasearch.search(TRIP, 1, "ECONOMY")
         self.assertEqual((cost, result["complete"]), (1, True))
-        self.assertEqual(self.paths(), ["/flights/search"] + ["/flights/pull/s1/meta"] * 3 + ["/flights/rpull/s1"])
+        self.assertEqual(self.paths(), ["/graphql-cdn", "/flights/search"] + ["/flights/pull/s1/meta"] * 3
+                         + ["/flights/rpull/s1"])
         self.assertEqual(self.slept, [3, 3, 3])
         self.assertEqual(self.session.calls[-1][1], {"v": "final"})
-        self.assertEqual(self.session.calls[0][1], {"s": "EZE-MAD.14-4-2027.MAD-EZE.28-4-2027", "countryCode": "AR",
-                                                    "numAdults": 1, "currency": "USD"})
+        self.assertEqual(self.searched(), {"s": "EZE-MAD.14-4-2027.MAD-EZE.28-4-2027", "countryCode": "AR",
+                                           "numAdults": 1, "currency": "USD"})
 
     def test_without_final_in_30_s_it_pulls_what_there_is_and_says_so(self):
         self.serve(fake.Session(versions=(4,)))
@@ -71,7 +77,7 @@ class Search(Base):
 
     def test_a_cabin_other_than_economy_goes_in_the_search(self):
         metasearch.search(TRIP, 2, "BUSINESS")
-        self.assertEqual((self.session.calls[0][1]["cabinClass"], self.session.calls[0][1]["numAdults"]), ("Business", 2))
+        self.assertEqual((self.searched()["cabinClass"], self.searched()["numAdults"]), ("Business", 2))
 
     def test_the_decoder_reads_templates_lists_of_them_and_leading_zeros(self):
         packed = [{"a": 1, "b": {"n": [0, 4, 5]}}, [1, 2, [2, [0, 6]], 3, [2, []]], [0, 7, 8], [], {}]
@@ -136,7 +142,8 @@ class Search(Base):
     def test_the_budget_counts_real_searches_of_the_last_hour(self):
         metasearch.search(TRIP, 1, "ECONOMY")
         metasearch.search(TRIP, 1, "ECONOMY")
-        self.assertEqual(metasearch.budget(), {"used_last_hour": 1, "safe_per_hour": 10, "shared": False})
+        self.assertEqual(metasearch.budget(), {"used_last_hour": 1, "streak_started_at": "2026-11-10T12:00:00Z",
+                                               "streak_seconds": 0, "safe_streak_seconds": 240, "shared": False})
         self.clock[0] = NOW + timedelta(minutes=30)
         metasearch.search(TRIP, 2, "ECONOMY")
         self.assertEqual(metasearch.budget()["used_last_hour"], 2)
@@ -148,10 +155,10 @@ class Search(Base):
         with self.assertRaises(metasearch.MetasearchBlocked) as caught:
             metasearch.search(TRIP, 1, "ECONOMY")
         self.assertEqual(caught.exception.hint, metasearch.BLOCKED_HINT)
-        self.assertEqual(self.paths(), ["/flights/search"])
+        self.assertEqual(self.paths(), ["/graphql-cdn", "/flights/search"])
         with self.assertRaises(metasearch.MetasearchBlocked):
             metasearch.search([("AEP", "MDZ", "2027-03-05")], 1, "ECONOMY")
-        self.assertEqual(self.paths(), ["/flights/search"])
+        self.assertEqual(self.paths(), ["/graphql-cdn", "/flights/search"])
 
     def test_a_block_in_the_middle_of_the_polls_also_stops_the_session(self):
         self.serve(fake.Session(override={"/flights/pull/": fake.Response(status=403, text="")}))
@@ -180,6 +187,89 @@ class Search(Base):
         with self.assertRaises(models.ParseError) as caught:
             metasearch.code("EZE,AEP", "origin")
         self.assertEqual(caught.exception.param, "origin")
+
+
+# The results page's query as the web sent it on 2026-11-12 (one way), and with the round trip's part as its code adds it
+ONE_WAY_QUERY = (
+    "query ($iso: String!, $iata: String!, $iata2: String!, $iata3: String!, $dep2: String!, $dep3: String!, $route: String) "
+    "{ alliances { id name airlines { iata } }, arrival2:airport (iata: $iata2, iso: $iso) { iata hardcoded_city "
+    "hardcoded_country country_code latitud longitud region { id } city { id name slug slug_name country { id name } } }, "
+    "arrival3:airport (iata: $iata3, iso: $iso) { city { id name } }, departure2:airport (iata: $dep2, iso: $iso) { city "
+    "{ id } }, departure3:airport (iata: $dep3, iso: $iso) { city { id } }, providerIata{ provider iata provider_iata_id }, "
+    "compareUnit (iata: $iata, country: $iso, route: $route) { provider_name provider_img search_url disallowed_trip_type } }")
+ROUND_TRIP_QUERY = ONE_WAY_QUERY.replace(
+    "$route: String) { alliances",
+    "$route: String, $currency: String!, $arr: String!, $outbound: String!, $inbound: String) { statsLast90(currency: "
+    "$currency, iso: $iso, departure: $iata, arrival: $arr, outbound: $outbound, inbound: $inbound) { avg_price created } "
+    "alliances")
+HISTORY = [{"avg_price": 1056.4583, "created": "2026-11-07"}, {"avg_price": 937.71, "created": "2026-08-25"},
+           {"avg_price": None, "created": "2026-09-01"}]
+
+
+class PageQuery(Base):
+    """Before each search, the results page's GraphQL query, as the web sends it."""
+
+    def test_a_one_way_sends_the_webs_query_before_the_search(self):
+        self.serve(fake.Session(result=fake.ONE_WAY))
+        result, _ = metasearch.search([("AEP", "MDZ", "2027-03-05")], 1, "ECONOMY")
+        self.assertEqual(self.paths()[:2], ["/graphql-cdn", "/flights/search"])
+        self.assertEqual(self.session.calls[0][1], {
+            "query": ONE_WAY_QUERY,
+            "variables": '{"iso":"AR","iata":"AEP","iata2":"","iata3":"","dep2":"","dep3":"","route":"AEP-MDZ",'
+                         '"arr":"MDZ","outbound":"2027-03-05","currency":"USD"}'})
+        self.assertEqual(self.session.sent[0], ({"device": "desktop"}, 5))
+        self.assertEqual(self.session.sent[1], (None, 60))
+        self.assertIsNone(result["history"])
+
+    def test_a_round_trip_asks_for_the_90_day_history_with_the_return(self):
+        self.serve(fake.Session(graph={"statsLast90": HISTORY}))
+        result, _ = metasearch.search(TRIP, 1, "ECONOMY", round_trip=True)
+        self.assertEqual(self.session.calls[0][1], {
+            "query": ROUND_TRIP_QUERY,
+            "variables": '{"iso":"AR","iata":"EZE","iata2":"","iata3":"","dep2":"","dep3":"","route":"EZE-MAD",'
+                         '"arr":"MAD","outbound":"2027-04-14","inbound":"2027-04-28","currency":"USD"}'})
+        self.assertEqual(result["history"], [("2026-08-25", 937.71), ("2026-11-07", 1056.46)])
+
+    def test_a_multi_city_trip_names_its_second_and_third_legs(self):
+        legs = [("EZE", "MAD", "2027-05-03"), ("MAD", "BCN", "2027-05-10"), ("BCN", "FCO", "2027-05-14"),
+                ("FCO", "EZE", "2027-05-20")]
+        self.serve(fake.Session(graph={"statsLast90": HISTORY}))
+        result, _ = metasearch.search(legs, 1, "ECONOMY")
+        self.assertEqual(self.session.calls[0][1], {
+            "query": ONE_WAY_QUERY,
+            "variables": '{"iso":"AR","iata":"EZE","iata2":"BCN","iata3":"FCO","dep2":"MAD","dep3":"BCN",'
+                         '"route":"EZE-MAD","arr":"MAD","outbound":"2027-05-03","inbound":"2027-05-10","currency":"USD"}'})
+        self.assertIsNone(result["history"])
+
+    def test_two_legs_back_and_forth_not_asked_as_a_round_trip_go_as_multi_city(self):
+        metasearch.search(TRIP, 1, "ECONOMY")
+        self.assertEqual(self.session.calls[0][1]["query"], ONE_WAY_QUERY)
+        self.assertIn('"iata2":"EZE","iata3":"","dep2":"MAD"', self.session.calls[0][1]["variables"])
+
+    def test_a_cached_search_sends_no_query(self):
+        metasearch.search(TRIP, 1, "ECONOMY", round_trip=True)
+        self.assertEqual(metasearch.search(TRIP, 1, "ECONOMY", round_trip=True)[1], 0)
+        self.assertEqual(self.paths().count("/graphql-cdn"), 1)
+
+    def test_a_failing_query_leaves_the_search_whole(self):
+        for answer in (fake.Response(status=502, text=""), fake.Response(status=400, text="{}"),
+                       fake.Response(text="<html>"), fake.Response({"data": None, "errors": [{"message": "x"}]})):
+            with self.subTest(answer.text):
+                metasearch._cache.clear()
+                self.serve(fake.Session(override={"/graphql-cdn": answer}))
+                result, cost = metasearch.search(TRIP, 1, "ECONOMY", round_trip=True)
+                self.assertEqual((cost, len(result["offers"]), result["history"]), (1, 3, None))
+                self.assertEqual(self.paths()[:2], ["/graphql-cdn", "/flights/search"])
+
+    def test_a_block_or_a_challenge_on_the_query_sends_no_search(self):
+        challenge = fake.Response(status=403, headers={"cf-mitigated": "challenge"}, text="<html>Just a moment...")
+        for answer, error in ((challenge, metasearch.MetasearchChallenge),
+                              (fake.Response(status=403, text=""), metasearch.MetasearchBlocked)):
+            with self.subTest(error.kind):
+                self.serve(fake.Session(override={"/graphql-cdn": answer}))
+                with self.assertRaises(error):
+                    metasearch.search(TRIP, 1, "ECONOMY")
+                self.assertEqual(self.paths(), ["/graphql-cdn"])
 
 
 class GraphQL(Base):
@@ -212,13 +302,6 @@ class GraphQL(Base):
         metasearch.months("BUE", "MAD", False)
         self.assertIn("oneWay: true", self.query())
 
-    def test_the_history_comes_by_day(self):
-        self.serve(fake.Session(graph={"statsLast90": [{"avg_price": 1056.4583, "created": "2026-11-07"},
-                                                       {"avg_price": 937.71, "created": "2026-08-25"}]}))
-        self.assertEqual(metasearch.history("EZE", "MAD", "2027-04-14", "2027-04-28"),
-                         [("2026-08-25", 937.71), ("2026-11-07", 1056.46)])
-        self.assertIn('outbound: "2027-04-14", inbound: "2027-04-28"', self.query())
-
     def test_graphql_goes_by_get_with_the_device_header_and_costs_no_search(self):
         metasearch.months("BUE", "MAD", True)
         self.assertEqual(metasearch.budget()["used_last_hour"], 0)
@@ -228,9 +311,9 @@ class GraphQL(Base):
         refused = fake.Response({"errors": [{"message": "Cannot query field"}]}, status=400)
         for answer in (refused, fake.Response({"data": None, "errors": [{"message": "x"}]}), fake.Response({"data": {}})):
             with self.subTest(answer.text):
-                self.serve(fake.Session(graph={"statsLast90": answer}))
+                self.serve(fake.Session(graph={"cheapFlightsMonthsFeed": answer}))
                 with self.assertRaises(metasearch.MetasearchUnreadable):
-                    metasearch.history("EZE", "MAD", "2027-04-14", "2027-04-28")
+                    metasearch.months("BUE", "MAD", True)
 
     def test_after_a_block_the_dates_ask_nothing_either(self):
         metasearch._blocked[0] = NOW
@@ -261,7 +344,8 @@ class FlightsTool(Base):
         self.assertEqual((glued["out"]["route"], glued["out"]["flights"], glued["back"]["route"]),
                          ("EZE-GRU-MAD", "JA3070 UX26", "MAD-GRU-EZE"))
         self.assertEqual(glued["out"]["layovers"], [{"airport": "GRU", "minutes": 220, "overnight": True}])
-        self.assertEqual((out["cost"], out["budget"]), (1, {"used_last_hour": 1, "safe_per_hour": 10, "shared": False}))
+        self.assertEqual((out["cost"], out["budget"]), (1, {"used_last_hour": 1, "streak_started_at": "2026-11-10T12:00:00Z",
+                                                            "streak_seconds": 0, "safe_streak_seconds": 240, "shared": False}))
 
     def test_the_summary_points_to_each_cheapest_and_the_fastest(self):
         out = self.run_tool()
@@ -304,7 +388,7 @@ class FlightsTool(Base):
     def test_the_90_day_history_is_economy_only(self):
         self.serve(fake.Session(graph={"statsLast90": [{"avg_price": 900, "created": "2026-09-01"}]}))
         self.assertNotIn("price_reference", self.run_tool(cabin="BUSINESS"))
-        self.assertNotIn("/graphql-cdn", self.paths())
+        self.assertIn("statsLast90(", self.session.calls[0][1]["query"])
         self.assertIn("price_reference", self.run_tool(adults=2))
 
     def test_two_codes_of_one_city_are_refused_before_any_search(self):
@@ -317,16 +401,16 @@ class FlightsTool(Base):
         self.assertEqual(error["param"], "next_legs")
         self.assertEqual(self.session.calls, [])
 
-    def test_a_round_trip_carries_the_90_day_history_and_a_one_way_does_not_ask(self):
+    def test_a_round_trip_carries_the_90_day_history_and_a_one_way_does_not(self):
         self.serve(fake.Session(graph={"statsLast90": [{"avg_price": 900, "created": "2026-09-01"},
                                                        {"avg_price": 1000, "created": "2026-11-09"},
                                                        {"avg_price": 950, "created": "2026-10-01"}]}))
         self.assertEqual(self.run_tool()["price_reference"], {"from": "2026-09-01", "to": "2026-11-09", "days": 3,
                                                               "latest": 1000, "low": 900, "high": 1000})
-        self.serve(fake.Session(result=fake.ONE_WAY))
+        self.serve(fake.Session(result=fake.ONE_WAY, graph={"statsLast90": [{"avg_price": 90, "created": "2026-09-01"}]}))
         out = tools.metasearch_flights("AEP", "MDZ", "2027-03-05")
         self.assertNotIn("price_reference", out)
-        self.assertNotIn("/graphql-cdn", self.paths())
+        self.assertNotIn("statsLast90", self.session.calls[0][1]["query"])
 
     def test_a_failing_history_leaves_the_search_whole(self):
         self.serve(fake.Session(graph={"statsLast90": fake.Response(status=400, text="{}")}))
@@ -337,7 +421,7 @@ class FlightsTool(Base):
     def test_a_city_code_and_a_multi_city_trip_go_in_the_key(self):
         tools.metasearch_flights("BUE", "MAD", "2027-05-03", next_legs=[{"origin": "BCN", "destination": "BUE",
                                                                           "date": "2027-05-17"}])
-        self.assertEqual(self.session.calls[0][1]["s"], "BUE-MAD.3-5-2027.BCN-BUE.17-5-2027")
+        self.assertEqual(self.searched()["s"], "BUE-MAD.3-5-2027.BCN-BUE.17-5-2027")
 
     def test_a_trip_is_checked_before_any_search(self):
         for arguments, param in (({"next_legs": [{"origin": "BCN", "destination": "EZE", "date": "2027-05-17"}]}, "next_legs"),
@@ -373,7 +457,7 @@ class SharedBudget(Base):
     def test_a_new_search_annotates_its_spend_once_and_the_budget_is_the_proxys_count(self):
         self.proxy_says = {"/budget/spend": {"used_last_hour": 4}}
         out = self.run_tool()
-        self.assertEqual(out["budget"], {"used_last_hour": 4, "safe_per_hour": 10, "shared": True})
+        self.assertEqual(out["budget"], {"used_last_hour": 4, "streak_seconds": 0, "safe_streak_seconds": 240, "shared": True})
         self.assertEqual(self.proxied, [self.SPEND])
 
     def test_a_cached_search_reads_the_count_once(self):
@@ -418,22 +502,10 @@ class SharedBudget(Base):
     def test_without_the_proxy_the_budget_is_this_sessions_count(self):
         metasearch.search(TRIP, 1, "ECONOMY")
         metasearch.search(TRIP, 2, "ECONOMY")
-        self.assertEqual(metasearch.budget(), {"used_last_hour": 2, "safe_per_hour": 10, "shared": False})
+        self.assertEqual(metasearch.budget(), {"used_last_hour": 2, "streak_started_at": "2026-11-10T12:00:00Z",
+                                               "streak_seconds": 0, "safe_streak_seconds": 240, "shared": False})
         self.assertEqual(self.proxied, [self.SPEND, self.SPEND])
 
-    def test_at_the_safe_limit_it_warns_and_below_it_does_not(self):
-        self.proxy_says = {"/budget": {"used_last_hour": 9}}
-        self.assertNotIn("warning", metasearch.budget())
-        self.proxy_says = {"/budget": {"used_last_hour": 10}}
-        warning = metasearch.budget()["warning"]
-        self.assertIn("10 searches from this IP", warning)
-        self.assertIn("Ask the user", warning)
-
-    def test_without_the_proxy_it_warns_at_the_limit_of_this_session(self):
-        metasearch._spent.extend([NOW - timedelta(minutes=5)] * 10)
-        out = metasearch.budget()
-        self.assertEqual((out["used_last_hour"], out["shared"]), (10, False))
-        self.assertIn("10 searches from this session", out["warning"])
 
     def test_a_live_block_of_the_ip_passes_through_and_warns(self):
         self.proxy_says = {"/budget": {"used_last_hour": 2, "blocked_at": "2026-11-10T09:00:00Z"}}
@@ -441,6 +513,98 @@ class SharedBudget(Base):
         self.assertEqual((out["used_last_hour"], out["shared"], out["blocked_at"]), (2, True, "2026-11-10T09:00:00Z"))
         self.assertIn("blocked this IP at 2026-11-10T09:00:00Z", out["warning"])
         self.assertIn("Ask the user", out["warning"])
+
+
+class StreakBudget(Base):
+    """GraphQL that reaches the API ends the streak; the budget warns at 240 s of it."""
+
+    def answer(self, cache):
+        return fake.Response({"data": {"r": []}}, headers={"cf-cache-status": cache} if cache else {})
+
+    def test_a_query_that_reached_the_api_is_annotated_before_the_search(self):
+        for cache in ("MISS", "EXPIRED", "REVALIDATED", "BYPASS", "DYNAMIC"):
+            with self.subTest(cache):
+                metasearch._cache.clear()
+                self.proxied = []
+                self.serve(fake.Session(override={"/graphql-cdn": self.answer(cache)}))
+                metasearch.search([("AEP", "MDZ", "2027-03-05")], 1, "ECONOMY")
+                self.assertEqual(self.proxied, [("POST", "/budget/graphql"), ("POST", "/budget/spend")])
+
+    def test_a_query_the_cdn_answered_is_not(self):
+        for cache in ("HIT", "STALE", "UPDATING", None):
+            with self.subTest(cache):
+                metasearch._cache.clear()
+                self.proxied = []
+                self.serve(fake.Session(override={"/graphql-cdn": self.answer(cache)}))
+                metasearch.search([("AEP", "MDZ", "2027-03-05")], 1, "ECONOMY")
+                self.assertEqual(self.proxied, [("POST", "/budget/spend")])
+
+    def test_the_dates_queries_are_annotated_too(self):
+        self.serve(fake.Session(override={"/graphql-cdn": self.answer("MISS")}))
+        metasearch.months("BUE", "MAD", True)
+        self.assertEqual(self.proxied, [("POST", "/budget/graphql")])
+
+    def test_without_the_proxy_each_query_that_reached_the_api_ends_the_streak(self):
+        for cache, started, seconds in (("MISS", "2026-11-10T12:03:20Z", 0), ("HIT", "2026-11-10T12:00:00Z", 200)):
+            with self.subTest(cache):
+                metasearch._cache.clear()
+                metasearch._spent.clear()
+                metasearch._graphed.clear()
+                self.serve(fake.Session(override={"/graphql-cdn": self.answer(cache)}))
+                self.clock[0] = NOW
+                metasearch.search([("AEP", "MDZ", "2027-03-05")], 1, "ECONOMY")
+                self.clock[0] = NOW + timedelta(seconds=200)
+                metasearch.search([("AEP", "MDZ", "2027-03-06")], 1, "ECONOMY")
+                out = metasearch.budget()
+                self.assertEqual((out["streak_started_at"], out["streak_seconds"], out["shared"]), (started, seconds, False))
+
+    def test_without_the_proxy_a_pause_of_390_s_ends_it(self):
+        metasearch._spent.extend([NOW - timedelta(seconds=500), NOW - timedelta(seconds=110)])
+        self.assertEqual(metasearch.budget()["streak_started_at"], "2026-11-10T11:58:10Z")
+        metasearch._spent[:] = [NOW - timedelta(seconds=499), NOW - timedelta(seconds=110)]
+        self.assertEqual(metasearch.budget()["streak_started_at"], "2026-11-10T11:51:41Z")
+        metasearch._spent[:] = [NOW - timedelta(seconds=390)]
+        out = metasearch.budget()
+        self.assertEqual((out["streak_seconds"], "streak_started_at" in out), (0, False))
+
+    def test_it_warns_at_240_s_with_the_time_left_and_not_at_239(self):
+        streak = {"used_last_hour": 9, "streak_started_at": "2026-11-10T11:56:01Z", "streak_seconds": 239,
+                  "streak_resets_in": 380}
+        self.proxy_says = {"/budget": streak}
+        self.assertNotIn("warning", metasearch.budget())
+        self.proxy_says = {"/budget": streak | {"streak_started_at": "2026-11-10T11:56:00Z", "streak_seconds": 240}}
+        out = metasearch.budget()
+        self.assertEqual((out["streak_started_at"], out["streak_seconds"], out["safe_streak_seconds"], out["shared"]),
+                         ("2026-11-10T11:56:00Z", 240, 240, True))
+        self.assertEqual(out["warning"], "This IP has searched the metasearch for 240 s in a row, and another search may "
+                                         "get the IP blocked for hours; the streak ends after 380 s with no search. Ask "
+                                         "the user before another one")
+
+    def test_the_streak_kept_from_the_spend_counts_the_polls_after_it(self):
+        self.proxy_says = {"/budget/spend": {"used_last_hour": 9, "streak_started_at": "2026-11-10T11:56:20Z",
+                                             "streak_seconds": 220, "streak_resets_in": 390}}
+        self.serve(fake.Session(versions=(4,)))
+        metasearch.sleep = lambda seconds: self.clock.__setitem__(0, self.clock[0] + timedelta(seconds=seconds))
+        metasearch.search(TRIP, 1, "ECONOMY")
+        out = metasearch.budget()
+        self.assertEqual((out["streak_started_at"], out["streak_seconds"]), ("2026-11-10T11:56:20Z", 250))
+        self.assertIn("the streak ends after 360 s with no search", out["warning"])
+
+    def test_a_kept_streak_older_than_390_s_has_ended(self):
+        self.proxy_says = {"/budget/spend": {"used_last_hour": 9, "streak_started_at": "2026-11-10T11:56:20Z",
+                                             "streak_seconds": 220, "streak_resets_in": 390}}
+        self.serve(fake.Session(versions=(4,)))
+        metasearch.sleep = lambda seconds: self.clock.__setitem__(0, self.clock[0] + timedelta(seconds=39))
+        metasearch.search(TRIP, 1, "ECONOMY")
+        out = metasearch.budget()
+        self.assertEqual((out["streak_seconds"], "streak_started_at" in out, "warning" in out), (0, False, False))
+
+    def test_without_the_proxy_it_warns_for_this_session(self):
+        metasearch._spent.extend([NOW - timedelta(seconds=245), NOW - timedelta(seconds=10)])
+        out = metasearch.budget()
+        self.assertEqual((out["streak_seconds"], out["shared"]), (245, False))
+        self.assertTrue(out["warning"].startswith("This session has searched the metasearch for 245 s in a row"))
+        self.assertIn("the streak ends after 380 s with no search", out["warning"])
 
 
 class SharedBudgetClient(unittest.TestCase):
@@ -475,7 +639,11 @@ class SharedBudgetClient(unittest.TestCase):
     def test_a_refusal_an_unreadable_answer_or_no_connection_is_none(self):
         for status, body, fails in ((429, b'{"used_last_hour": 3}', None), (502, b"", None), (403, b"", None),
                                     (200, b"<html>", None), (200, b'{"used": 3}', None),
-                                    (200, b'{"used_last_hour": true}', None), (200, b"", ConnectionRefusedError())):
+                                    (200, b'{"used_last_hour": true}', None), (200, b"", ConnectionRefusedError()),
+                                    (200, b'{"used_last_hour": 3, "streak_seconds": "9"}', None),
+                                    (200, b'{"used_last_hour": 3, "streak_started_at": "2026-11-10T09:00:00Z"}', None),
+                                    (200, b'{"used_last_hour": 3, "streak_started_at": 1, "streak_seconds": 9, '
+                                          b'"streak_resets_in": 9}', None)):
             with self.subTest(f"{status} {body!r} {fails!r}"):
                 self.assertIsNone(self.ask(status, body, fails)[0])
 
@@ -541,16 +709,16 @@ class DatesToolAndTerminal(Base):
         self.proxy_says = {"/budget/spend": {"used_last_hour": 1}}
         printed = self.terminal("meta", "EZE", "MAD", "2027-04-14", "2027-04-28", "--limit", "1")
         self.assertTrue(printed.startswith("USD 800  JetSMART, Air Europa  from Agency B  (separate tickets)"))
-        self.assertTrue(printed.rstrip().endswith("Cost: 1 search; 1 of 10 in the last hour"))
+        self.assertTrue(printed.rstrip().endswith("Cost: 1 search; streak of 0 s, of a safe 240 s"))
         self.assertEqual(json.loads(self.terminal("meta", "EZE", "MAD", "2027-04-14", "--json"))["cost"], 1)
 
     def test_the_terminal_says_when_the_count_is_this_sessions_only_and_prints_the_warning(self):
         self.serve(fake.Session())
-        metasearch._spent.extend([NOW - timedelta(minutes=5)] * 9)
+        metasearch._spent.append(NOW - timedelta(seconds=250))
         printed = self.terminal("meta", "EZE", "MAD", "2027-04-14", "2027-04-28", "--limit", "1").rstrip().splitlines()
-        self.assertEqual(printed[-2], "Cost: 1 search; 10 of 10 in the last hour (this session only: the proxy could "
-                                      "not count the others)")
-        self.assertTrue(printed[-1].startswith("Warning: 10 searches from this session in the last hour"))
+        self.assertEqual(printed[-2], "Cost: 1 search; streak of 250 s, of a safe 240 s (this session only: the proxy "
+                                      "could not count the others)")
+        self.assertTrue(printed[-1].startswith("Warning: This session has searched the metasearch for 250 s in a row"))
 
 
 if __name__ == "__main__":

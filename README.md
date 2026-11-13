@@ -24,7 +24,7 @@ Or ask a new agent session for flights in plain words: the `flights` subagent se
 - `search_flights`: flights on a date, or round trips, cheapest first, with bags, layovers (overnight, airport changes) and self-transfers.
 - `cheapest_dates`: the lowest fare per departure date, up to 93 dates.
 - `find_airports`: airports by code, city (Spanish names too) or name; a city code lists all its airports.
-- `metasearch_flights`: every seller's live fares for one trip (one way, round trip or multi-city), with the 3 cheapest sellers per itinerary, bag, change and refund fees, and a summary per airline and stops. It spends 1 search of an hourly budget per IP, counted across every session on this machine, and says so in every reply, with a warning to ask first at the limit or while the IP is blocked.
+- `metasearch_flights`: every seller's live fares for one trip (one way, round trip or multi-city), with the 3 cheapest sellers per itinerary, bag, change and refund fees, and a summary per airline and stops. Each call spends 1 search from this machine's IP and says so in every reply, with the IP's search streak counted across every session on this machine, and a warning to ask first near its limit or while the IP is blocked.
 - `metasearch_dates`: the lowest fares the metasearch saw, per month or per day, for free.
 - `promociones-aereas`: the deals on promociones-aereas.com.ar (flights, packages, hotels), with their dates and links.
 
@@ -60,7 +60,7 @@ Or ask a new agent session for flights in plain words: the `flights` subagent se
 Each session gets its own internal network and two read-only, unprivileged containers:
 
 - **Core**: letsfly, the MCP server and the terminal commands, with no network of its own and nothing mounted.
-- **Proxy**: the only way out. It lets HTTPS through only to the allowed hosts and logs every attempt. Its one mount is a read-only file where the host logs each metasearch search and block (time, egress IP, session), so every session on this machine shares one budget per IP. It learns that IP from the metasearch's edge, with a request that spends no search and is logged like the rest.
+- **Proxy**: the only way out. It lets HTTPS through only to the allowed hosts and logs every attempt. Its one mount is a read-only file where the host logs each metasearch search, block and query (time, egress IP, session), so every session on this machine shares one budget per IP. It learns that IP from the metasearch's edge, with a request that spends no search and is logged like the rest.
 
 The proxy exits once the core is gone, so a client that kills `flights mcp` (Claude Code allows half a second) leaves no containers or networks behind.
 

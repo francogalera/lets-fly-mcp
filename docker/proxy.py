@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Egress proxy for flights, the only way out of the core's network: lets HTTPS through only to the allowed hosts
 and logs each attempt to stdout as `UTC-datetime ALLOW|BLOCK|ERROR|TRACE host:port session` for bin/flights to
-collect. Also answers the budget routes over plain HTTP, counting the metasearch calls of every session on the egress
-IP from the shared file plus its own, and prints each accepted one as `BUDGET KIND IP` for bin/flights to append.
-Exits when the container <SESSION>-core leaves its network.
+collect. Also answers the budget routes over plain HTTP, counting the metasearch searches, blocks and GraphQL queries
+of every session on the egress IP from the shared file plus its own, and prints each accepted one as
+`BUDGET KIND IP` for bin/flights to append. Exits when the container <SESSION>-core leaves its network.
 Usage: proxy.py PORT HOST[,HOST...] SESSION TRACE_HOST"""
 import calendar
 import ipaddress
@@ -20,9 +20,12 @@ from urllib.parse import urlsplit
 
 PORT, SESSION, TRACE_HOST, ALLOW = 0, "", "", set()
 BUDGET_FILE = "/budget.log"
-HOUR, BLOCK_TTL, TRACE_TTL, PER_HOUR = 3600, 13 * 3600, 60, 30
-LINE = re.compile(r"(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ) (spend|block) (\S+) (flights-\d+-\d+)")
-ROUTES = {("GET", "/budget"): None, ("POST", "/budget/spend"): "spend", ("POST", "/budget/block"): "block"}
+HOUR, BLOCK_TTL, TRACE_TTL, PER_HOUR = 3600, 13 * 3600, 60, 240
+RESET = 390
+STAMP = "%Y-%m-%dT%H:%M:%SZ"
+LINE = re.compile(r"(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ) (spend|block|graphql) (\S+) (flights-\d+-\d+)")
+ROUTES = {("GET", "/budget"): None, ("POST", "/budget/spend"): "spend", ("POST", "/budget/block"): "block",
+          ("POST", "/budget/graphql"): "graphql"}
 lock = threading.Lock()
 budget_lock = threading.Lock()
 clock = time.time
@@ -67,7 +70,7 @@ def file_lines(ip):
         if not m or m[4] == SESSION:
             continue
         try:
-            t = calendar.timegm(time.strptime(m[1], "%Y-%m-%dT%H:%M:%SZ"))
+            t = calendar.timegm(time.strptime(m[1], STAMP))
             if str(ipaddress.ip_address(m[3])) == ip:
                 found.append((t, m[2]))
         except ValueError:
@@ -76,14 +79,33 @@ def file_lines(ip):
 
 
 def status(ip, now):
-    """The reply body for this IP: its spends in the last hour, and its latest block unless a spend came after it."""
+    """The reply body for this IP: its spends in the last hour, its running streak, and its latest block unless a spend
+    came after it."""
     lines = file_lines(ip) + [(t, kind) for t, kind, i in own if i == ip]
     spends = [t for t, kind in lines if kind == "spend"]
     body = {"used_last_hour": sum(1 for t in spends if t > now - HOUR)}
+    first, last = streak(lines, now)
+    if first is not None:
+        body |= {"streak_started_at": time.strftime(STAMP, time.gmtime(first)), "streak_seconds": int(now - first),
+                 "streak_resets_in": int(RESET - (now - last))}
     blocks = [t for t, kind in lines if kind == "block" and t > now - BLOCK_TTL]
     if blocks and not any(t > max(blocks) for t in spends):
-        body["blocked_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(max(blocks)))
+        body["blocked_at"] = time.strftime(STAMP, time.gmtime(max(blocks)))
     return body
+
+
+def streak(lines, now):
+    """The (first, last) search of the running streak, searches with no GraphQL that reached the origin between them
+    and no pause of RESET s, or (None, None)."""
+    first = last = None
+    for t, kind in sorted(lines, key=lambda line: (int(line[0]), line[1] != "graphql", line[0])):
+        if kind == "graphql":
+            first = last = None
+        elif kind == "spend":
+            if last is None or t - last >= RESET:
+                first = t
+            last = t
+    return (first, last) if last is not None and now - last < RESET else (None, None)
 
 
 def budget(kind):

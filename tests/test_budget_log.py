@@ -39,6 +39,10 @@ class BudgetLogTest(unittest.TestCase):
             "2026-11-10T12:00:00Z block 2001:db8::1 flights-42-7\n",
         )
 
+    def test_a_graphql_line_is_kept_like_a_spend(self):
+        self.split("BUDGET graphql 203.0.113.9\n")
+        self.assertEqual(self.written(), "2026-11-10T12:00:00Z graphql 203.0.113.9 flights-42-7\n")
+
     def test_lines_that_do_not_fit_are_dropped(self):
         out = self.split(
             "BUDGET refund 203.0.113.9\n",

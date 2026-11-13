@@ -60,6 +60,10 @@ class Base(unittest.TestCase):
         first, _, body, out = self.raw(f"{method} {path} HTTP/1.1\r\nHost: proxy:3128\r\n\r\n".encode())
         return first, json.loads(body), out
 
+    def counted(self, method, path):
+        """The body without its streak, for the tests of the count, the block and the limits."""
+        return {k: v for k, v in self.call(method, path)[1].items() if not k.startswith("streak_")}
+
 
 class ProxyRoutes(Base):
     def test_get_traces_and_answers_the_count(self):
@@ -74,7 +78,9 @@ class ProxyRoutes(Base):
     def test_spend_annotates_and_counts_it(self):
         self.assertEqual(
             self.call("POST", "/budget/spend"),
-            ("HTTP/1.1 200 OK", {"used_last_hour": 1}, ["TRACE meta.example:443 flights-1-1", "spend 203.0.113.7"]),
+            ("HTTP/1.1 200 OK", {"used_last_hour": 1, "streak_started_at": "2026-11-10T12:00:00Z", "streak_seconds": 0,
+                                 "streak_resets_in": 390},
+             ["TRACE meta.example:443 flights-1-1", "spend 203.0.113.7"]),
         )
 
     def test_block_annotates_and_answers_it(self):
@@ -111,10 +117,7 @@ class ProxyRoutes(Base):
     def test_one_annotation_per_second_per_kind(self):
         self.call("POST", "/budget/spend")
         self.now = NOW + 0.5
-        self.assertEqual(
-            self.call("POST", "/budget/block")[:2],
-            ("HTTP/1.1 200 OK", {"used_last_hour": 1, "blocked_at": "2026-11-10T12:00:00Z"}),
-        )
+        self.assertEqual(self.counted("POST", "/budget/block"), {"used_last_hour": 1, "blocked_at": "2026-11-10T12:00:00Z"})
         self.now = NOW + 0.7
         self.assertEqual(
             self.call("POST", "/budget/spend"),
@@ -123,40 +126,35 @@ class ProxyRoutes(Base):
         self.now = NOW + 1.2
         first, _, out = self.call("POST", "/budget/block")
         self.assertEqual((first, out), ("HTTP/1.1 429 Too Many Requests", []))
-        self.assertEqual(self.call("POST", "/budget/spend")[:2], ("HTTP/1.1 200 OK", {"used_last_hour": 2}))
+        self.assertEqual(self.counted("POST", "/budget/spend"), {"used_last_hour": 2})
 
     def test_block_accepted_after_the_spends_hit_their_limit(self):
-        for i in range(30):
-            self.now = NOW + 70 * i
+        for i in range(240):
+            self.now = NOW + 14 * i
             self.call("POST", "/budget/spend")
-        self.now = NOW + 2100
+        self.now = NOW + 3360
         self.assertEqual(self.call("POST", "/budget/spend")[0], "HTTP/1.1 429 Too Many Requests")
-        self.now = NOW + 2105
-        self.assertEqual(
-            self.call("POST", "/budget/block"),
-            (
-                "HTTP/1.1 200 OK",
-                {"used_last_hour": 30, "blocked_at": "2026-11-10T12:35:05Z"},
-                ["TRACE meta.example:443 flights-1-1", "block 203.0.113.7"],
-            ),
-        )
+        self.now = NOW + 3365
+        first, _, out = self.call("POST", "/budget/block")
+        self.assertEqual((first, out), ("HTTP/1.1 200 OK", ["TRACE meta.example:443 flights-1-1", "block 203.0.113.7"]))
+        self.assertEqual(self.counted("GET", "/budget"), {"used_last_hour": 240, "blocked_at": "2026-11-10T12:56:05Z"})
 
-    def test_thirty_annotations_per_rolling_hour(self):
-        for i in range(30):
-            self.now = NOW + 60 * i
+    def test_240_annotations_per_rolling_hour(self):
+        for i in range(240):
+            self.now = NOW + 15 * i
             self.assertEqual(self.call("POST", "/budget/spend")[0], "HTTP/1.1 200 OK")
-        self.now = NOW + 1800
+        self.now = NOW + 3590
         self.assertEqual(self.call("POST", "/budget/spend")[0], "HTTP/1.1 429 Too Many Requests")
         self.now = NOW + 3600
-        self.assertEqual(self.call("POST", "/budget/spend")[:2], ("HTTP/1.1 200 OK", {"used_last_hour": 30}))
+        self.assertEqual(self.counted("POST", "/budget/spend"), {"used_last_hour": 240})
 
 
 class ProxyCount(Base):
     def test_own_line_counts_once_before_and_after_the_file_has_it(self):
         self.call("POST", "/budget/spend")
-        self.assertEqual(self.call("GET", "/budget")[1], {"used_last_hour": 1})
+        self.assertEqual(self.counted("GET", "/budget"), {"used_last_hour": 1})
         self.write("2026-11-10T12:00:00Z spend 203.0.113.7 flights-1-1")
-        self.assertEqual(self.call("GET", "/budget")[1], {"used_last_hour": 1})
+        self.assertEqual(self.counted("GET", "/budget"), {"used_last_hour": 1})
 
     def test_other_sessions_count_per_ip_and_an_ip_change_resets(self):
         self.write(
@@ -165,9 +163,9 @@ class ProxyCount(Base):
             "2026-11-10T11:30:00Z spend 198.51.100.9 flights-2-2",
         )
         self.call("POST", "/budget/spend")
-        self.assertEqual(self.call("GET", "/budget")[1], {"used_last_hour": 3})
+        self.assertEqual(self.counted("GET", "/budget"), {"used_last_hour": 3})
         self.ip, self.now = OTHER_IP, NOW + 61
-        self.assertEqual(self.call("GET", "/budget")[1], {"used_last_hour": 1})
+        self.assertEqual(self.counted("GET", "/budget"), {"used_last_hour": 1})
 
     def test_old_and_broken_lines_are_ignored(self):
         self.write(
@@ -211,7 +209,7 @@ class ProxyCount(Base):
 
     def test_own_spend_clears_a_block_from_the_file(self):
         self.write("2026-11-10T11:00:00Z block 203.0.113.7 flights-2-2")
-        self.assertEqual(self.call("POST", "/budget/spend")[1], {"used_last_hour": 1})
+        self.assertEqual(self.counted("POST", "/budget/spend"), {"used_last_hour": 1})
 
     def test_trace_reused_under_60_seconds_and_measured_again_after(self):
         self.write("2026-11-10T11:30:00Z spend 198.51.100.9 flights-2-2")
@@ -226,3 +224,68 @@ class ProxyCount(Base):
         self.now = NOW + 5
         self.call("POST", "/budget/spend")
         self.assertEqual(self.traces, 2)
+
+
+class Streak(Base):
+    """The IP's running streak: searches with no GraphQL that reached the origin between them and no pause of 390 s."""
+
+    def streak(self):
+        body = self.call("GET", "/budget")[1]
+        return body.get("streak_started_at"), body.get("streak_seconds"), body.get("streak_resets_in")
+
+    def test_graphql_annotates_its_own_kind(self):
+        self.assertEqual(
+            self.call("POST", "/budget/graphql"),
+            ("HTTP/1.1 200 OK", {"used_last_hour": 0}, ["TRACE meta.example:443 flights-1-1", "graphql 203.0.113.7"]),
+        )
+
+    def test_it_runs_from_the_first_search_and_says_when_it_ends_by_itself(self):
+        self.call("POST", "/budget/spend")
+        self.now = NOW + 100
+        self.call("POST", "/budget/spend")
+        self.now = NOW + 200
+        self.assertEqual(self.streak(), ("2026-11-10T12:00:00Z", 200, 290))
+
+    def test_a_graphql_ends_it_and_a_search_in_its_same_second_opens_the_next(self):
+        for lines in (("2026-11-10T11:58:00Z spend 203.0.113.7 flights-2-2",
+                       "2026-11-10T11:59:00Z graphql 203.0.113.7 flights-2-2",
+                       "2026-11-10T11:59:00Z spend 203.0.113.7 flights-2-2"),
+                      ("2026-11-10T11:58:00Z spend 203.0.113.7 flights-2-2",
+                       "2026-11-10T11:59:00Z spend 203.0.113.7 flights-2-2",
+                       "2026-11-10T11:59:00Z graphql 203.0.113.7 flights-2-2")):
+            with self.subTest(lines[1]):
+                self.write(*lines)
+                self.assertEqual(self.streak(), ("2026-11-10T11:59:00Z", 60, 330))
+        self.write("2026-11-10T11:58:00Z spend 203.0.113.7 flights-2-2",
+                   "2026-11-10T11:59:00Z graphql 203.0.113.7 flights-2-2")
+        self.assertEqual(self.streak(), (None, None, None))
+
+    def test_a_pause_of_390_s_opens_a_new_one_and_389_s_does_not(self):
+        self.write("2026-11-10T11:40:00Z spend 203.0.113.7 flights-2-2",
+                   "2026-11-10T11:46:29Z spend 203.0.113.7 flights-2-2",
+                   "2026-11-10T11:52:59Z spend 203.0.113.7 flights-2-2")
+        self.now = NOW - 390
+        self.assertEqual(self.streak(), ("2026-11-10T11:52:59Z", 31, 359))
+        self.write("2026-11-10T11:50:00Z spend 203.0.113.7 flights-2-2",
+                   "2026-11-10T11:56:29Z spend 203.0.113.7 flights-2-2")
+        self.now = NOW
+        self.assertEqual(self.streak(), ("2026-11-10T11:50:00Z", 600, 179))
+
+    def test_none_once_the_last_search_is_390_s_old(self):
+        self.call("POST", "/budget/spend")
+        self.now = NOW + 389
+        self.assertEqual(self.streak(), ("2026-11-10T12:00:00Z", 389, 1))
+        self.now = NOW + 390
+        self.assertEqual(self.streak(), (None, None, None))
+
+    def test_two_sessions_see_one_streak_with_each_line_counted_once(self):
+        self.write("2026-11-10T11:58:00Z spend 203.0.113.7 flights-2-2")
+        self.call("POST", "/budget/spend")
+        self.write("2026-11-10T11:58:00Z spend 203.0.113.7 flights-2-2",
+                   "2026-11-10T12:00:00Z spend 203.0.113.7 flights-1-1")
+        self.now = NOW + 30
+        mine = self.call("GET", "/budget")[1]
+        self.proxy.SESSION, self.proxy.own = "flights-2-2", [(NOW - 120, "spend", IP)]
+        self.assertEqual(self.call("GET", "/budget")[1], mine)
+        self.assertEqual(mine, {"used_last_hour": 2, "streak_started_at": "2026-11-10T11:58:00Z", "streak_seconds": 150,
+                                "streak_resets_in": 360})
