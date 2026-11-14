@@ -2,31 +2,7 @@
 
 Very fast flight search for your terminal, and an MCP server for your agent: real Google Flights fares and the cheapest dates in a range, every seller's fares from a flight metasearch that compares agencies and airlines, with short links to the booking pages. Over MCP, Claude Code, Claude Desktop, Codex and ChatGPT Desktop also get the deals published on promociones-aereas.com.ar. On Linux and macOS. Secure by default: it runs sandboxed in Docker and reaches only the sites it reads, with no API keys and no accounts.
 
-![The two ways to use it, then a search in the terminal and a question to the flights subagent](https://github.com/user-attachments/assets/b45f5abd-4dca-4269-90bb-22a927404c6e)
-
-## Install
-
-    git clone https://github.com/francogalera/lets-fly-mcp.git ~/lets-fly && ~/lets-fly/install.sh
-
-It needs Docker, git, curl and python3. Then search from any terminal:
-
-    $ flights search EZE JFK 2026-12-10
-    USD 831  American
-      EZE-JFK  2026-12-10 20:40 > 2026-12-11 05:30  10.8 h  AA954
-      http://127.0.0.1:18375/lmzcjcev
-
-`flights dates`, `flights airports`, `flights meta` and `flights meta-dates` work the same way, and `--json` prints what the agent gets.
-
-Or ask a new agent session for flights in plain words: the `flights` subagent searches the dates and airports you allow and answers with the best options, their bags, layovers and links.
-
-## Tools
-
-- `search_flights`: flights on a date, or round trips, cheapest first, with bags, layovers (overnight, airport changes) and self-transfers.
-- `cheapest_dates`: the lowest fare per departure date, up to 93 dates.
-- `find_airports`: airports by code, city (Spanish names too) or name; a city code lists all its airports.
-- `metasearch_flights`: every seller's live fares for one trip (one way, round trip or multi-city), with one price per itinerary from its cheapest seller, bag, change and refund fees, and a summary per airline and stops. Each call spends 1 search, counted across every session on this machine's IP, and the reply warns to ask first when another one could get the IP blocked.
-- `metasearch_dates`: the lowest fares the metasearch saw, per month or per day, for free.
-- `promociones-aereas`: the deals on promociones-aereas.com.ar (flights, packages, hotels), with their dates and links.
+https://github.com/user-attachments/assets/ba088c53-7c51-45d6-8dc2-bc8a7e4ef1d4
 
 ## Conventions
 
@@ -64,15 +40,39 @@ Each session gets its own internal network and two read-only, unprivileged conta
 
 The proxy exits once the core is gone, so a client that kills `flights mcp` (Claude Code allows half a second) leaves no containers or networks behind.
 
-## Clients
+## Tools
 
-Every install sets up Claude Code (the subagent and the `broad-search` skill), Claude Desktop and Codex when they are installed, and a plugin in the personal marketplace, from which ChatGPT Desktop installs it. A client that fails is skipped with a warning, and the next update tries again.
+- `search_flights`: flights on a date, or round trips, cheapest first, with bags, layovers (overnight, airport changes) and self-transfers.
+- `cheapest_dates`: the lowest fare per departure date, up to 93 dates.
+- `find_airports`: airports by code, city (Spanish names too) or name; a city code lists all its airports.
+- `metasearch_flights`: every seller's live fares for one trip (one way, round trip or multi-city), with one price per itinerary from its cheapest seller, bag, change and refund fees, and a summary per airline and stops. Each call spends 1 search, counted across every session on this machine's IP, and the reply warns to ask first when another one could get the IP blocked.
+- `metasearch_dates`: the lowest fares the metasearch saw, per month or per day, for free.
+- `promociones-aereas`: the deals on promociones-aereas.com.ar (flights, packages, hotels), with their dates and links.
 
 ## Links
 
 The tools hand out short links, `http://127.0.0.1:18375/<id>`, because the agent sometimes altered booking links of about 300 characters when it copied them. The id is the hash of the link, so it can only open its own link.
 
 The core still mounts nothing: it prints each link on stderr, and the launcher keeps it on the host when the id matches. `flights links` redirects each id, only on 127.0.0.1, as a user service that every install sets up and restarts (systemd on Linux, launchd on macOS). The port never changes and the files last, so links in old answers keep working.
+
+## Clients
+
+Every install sets up Claude Code (the subagent and the `broad-search` skill), Claude Desktop and Codex when they are installed, and a plugin in the personal marketplace, from which ChatGPT Desktop installs it. A client that fails is skipped with a warning, and the next update tries again.
+
+## Install
+
+    git clone https://github.com/francogalera/lets-fly-mcp.git ~/lets-fly && ~/lets-fly/install.sh
+
+It needs Docker, git, curl and python3. Then search from any terminal:
+
+    $ flights search EZE JFK 2026-12-10
+    USD 831  American
+      EZE-JFK  2026-12-10 20:40 > 2026-12-11 05:30  10.8 h  AA954
+      http://127.0.0.1:18375/lmzcjcev
+
+`flights dates`, `flights airports`, `flights meta` and `flights meta-dates` work the same way, and `--json` prints what the agent gets.
+
+Or ask a new agent session for flights in plain words: the `flights` mcp searches the dates and airports you allow and answers with the best options, their bags, layovers and links.
 
 ## Update
 
