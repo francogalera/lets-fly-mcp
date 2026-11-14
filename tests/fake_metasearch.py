@@ -106,11 +106,12 @@ class Session:
 
     def __init__(self, result=ROUND_TRIP, versions=(3, 5, "final"), graph=None, override=None):
         self.result, self.versions, self.graph, self.override = result, list(versions), graph or {}, override or {}
-        self.calls = []
+        self.calls, self.sent = [], []
 
     def get(self, url, params=None, headers=None, timeout=None):
         path = urllib.parse.urlsplit(url).path
         self.calls.append((path, params or {}))
+        self.sent.append((headers, timeout))
         for prefix, response in self.override.items():
             if path.startswith(prefix):
                 return response
@@ -121,6 +122,12 @@ class Session:
             return Response({"version": version, "meta": {}})
         if path.startswith("/flights/rpull/"):
             return Response(pack(self.result))
+        if path == "/graphql-cdn" and "compareUnit" in params["query"]:
+            history = self.graph.get("statsLast90", [])
+            if isinstance(history, Response):
+                return history
+            data = {"alliances": [], "providerIata": [], "compareUnit": None, "arrival2": None}
+            return Response({"data": data | ({"statsLast90": history} if "statsLast90" in params["query"] else {})})
         if path == "/graphql-cdn":
             query = params["query"]
             for field, rows in self.graph.items():

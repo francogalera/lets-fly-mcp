@@ -25,31 +25,21 @@ def itinerary(row) -> Itinerary:
 
 
 def itineraries_exist(data) -> bool:
-    """Whether Google has itineraries for the search before its filters (airlines, stops, hours) remove them: rows on
-    the page, or data[7][0], the price range of all its results as [[null, lowest], [null, highest]]. That range comes
-    null only when Google has nothing at all, whatever the filters."""
+    """Whether Google has itineraries before its filters remove them: rows on the page, or data[7][0], the price range
+    of all its results, null only when it has nothing at all."""
     rows = any(isinstance(block := _at(data, index), list) and isinstance(_at(block, 0), list) and block[0]
                for index in (2, 3))
     return rows or _at(_at(data, 7), 0) is not None
 
 
 def price_reference(data) -> dict | None:
-    """Google's reference for the page, or None. Unlike a row, a block that cannot be read never fails the search.
-
-    data[5] on the first page, in the page's currency, for all adults and on a round trip for the pair. Each amount
-    comes as [null, n].
-    [0] level, which the page words as 1 low, 2 to 4 typical, 5 high: below [4], inside [4] to [5], above [5].
-    [1] lowest fare of this page. Follows max_stops. A round trip pair is quoted on its return page and can come below it.
-    With airlines in the tfs every amount describes those airlines, and an hour window or two airlines empty the block.
-    [2] typical fare. [3] typical minus lowest, positive when cheap, rounded on its own: can differ by 1.
-    [4] and [5] the typical range, low and high.
-    [6] the cabin: 1 economy, 3 business, 4 first. Premium economy and some first class searches come without the block.
-    [10] [[[timestamp_ms, lowest that day], ...]], null with over 1 adult and in first class, daily up to today: at
-    most 62 days, fewer on far dates, and how far varies by route.
-    Each timestamp is midnight at the origin, so adding 13 hours lands on its day from UTC-10 to UTC+13: New Zealand
-    in summer and Tonga fit, Pago Pago and Niue (UTC-11) and UTC+14 come out a day off.
-    [7] to [9] null, [11] opaque and [12] the destination city, not read.
-    Return pages (with the outbound pinned) carry null here."""
+    """Google's reference for the page, or None; a block that cannot be read never fails the search. data[5] of the
+    first page, for all adults (a round trip: the pair), each amount as [null, n]. Return pages carry null.
+    [1] lowest fare of this page, after max_stops; a round trip pair can come below it. With airlines in the tfs every
+    amount describes them, and a window or two airlines empty the block. [2] typical fare. [4], [5] the typical range.
+    [6] cabin: premium economy and some first class come without the block.
+    [10] [[[timestamp_ms, lowest that day], ...]] up to today, at most 62 days, null with over 1 adult and in first
+    class. Each timestamp is midnight at the origin: +13 h lands on its day from UTC-10 to UTC+13."""
     block = _at(data, 5)
     if not isinstance(block, list):
         return None

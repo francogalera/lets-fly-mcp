@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""The metasearch budget file the proxies read, ~/.local/state/flights/metasearch-budget.log: one line per spend or
-block, "YYYY-MM-DDTHH:MM:SSZ KIND IP SESSION". Only the host writes it. Python 3.9 and the standard library only.
+"""The metasearch budget file the proxies read, ~/.local/state/flights/metasearch-budget.log, one
+"YYYY-MM-DDTHH:MM:SSZ KIND IP SESSION" per line. Only the host writes it. Python 3.9, standard library only.
 Usage: budget.py split SESSION BUDGET_FILE | trim BUDGET_FILE"""
 import calendar
 import ipaddress
@@ -8,7 +8,7 @@ import os
 import sys
 import time
 
-KINDS = ("spend", "block")
+KINDS = ("spend", "block", "graphql")
 LIMIT = 64 * 1024
 KEEP = 24 * 3600
 STAMP = "%Y-%m-%dT%H:%M:%SZ"
@@ -27,9 +27,8 @@ def budget_line(line, session, now):
 
 
 def split(lines, session, path, passthrough, clock=time.time):
-    """Appends each fitting BUDGET line to path, with the host's time and this session, drops the rest of them and
-    LISTEN, and passes every other line through as it comes. It never stops reading: the proxy's output has no other
-    reader."""
+    """Appends each fitting BUDGET line to path with the host's time and this session, and passes non-BUDGET lines
+    through. It never stops reading: the proxy's output has no other reader."""
     broken = False
     for line in lines:
         if line.startswith("LISTEN"):

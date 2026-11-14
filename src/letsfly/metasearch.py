@@ -1,7 +1,6 @@
-"""The flight metasearch: one search asks every seller at once and returns all their itineraries. The API limits
-searches per IP and answers more with a block of hours, so a search is expensive, while its polls, its pull and its
-GraphQL (dates and price history) are free. The host is named here and in bin/flights only.
-Flow, as the web client runs it: search, meta every EVERY s until version is "final", one pull of the whole result."""
+"""The flight metasearch: one search asks every seller at once. Searches are expensive, since the API limits them per
+IP; polls, pulls and GraphQL are free. The host is named here and in bin/flights only.
+Flow, as the web runs it: the results page's query, search, meta every EVERY s until "final", one pull."""
 import base64
 import binascii
 import http.client
@@ -22,18 +21,33 @@ API = "https://api.turismocity.com"
 WEB = "https://www.turismocity.com.ar"
 PROFILE = "safari2601"
 TIMEOUT = 60
+PAGE_TIMEOUT = 5
 EVERY = 3  # the web polls meta every 0.5 s
 POLLS = 10  # 30 s: final came within 21 s in every search of the spike
 CACHE_FOR = timedelta(minutes=15)
-SAFE_PER_HOUR = 10
+SAFE_STREAK = 240
+RESET = 390
+ORIGIN = {"MISS", "EXPIRED", "REVALIDATED", "BYPASS", "DYNAMIC"}
 CABINS = {"ECONOMY": "Economy", "PREMIUM_ECONOMY": "PremiumEconomy", "BUSINESS": "Business", "FIRST": "First"}
 BLOCKED_HINT = "Usually lasts hours: go on with search_flights and do not retry"
+PAGE_HEAD = ("query ($iso: String!, $iata: String!, $iata2: String!, $iata3: String!, $dep2: String!, $dep3: String!, "
+             "$route: String")
+PAGE_ROUND_TRIP = ", $currency: String!, $arr: String!, $outbound: String!, $inbound: String"
+PAGE_HISTORY = ("statsLast90(currency: $currency, iso: $iso, departure: $iata, arrival: $arr, outbound: $outbound, "
+                "inbound: $inbound) { avg_price created } ")
+PAGE_BODY = ("alliances { id name airlines { iata } }, arrival2:airport (iata: $iata2, iso: $iso) { iata "
+             "hardcoded_city hardcoded_country country_code latitud longitud region { id } city { id name slug "
+             "slug_name country { id name } } }, arrival3:airport (iata: $iata3, iso: $iso) { city { id name } }, "
+             "departure2:airport (iata: $dep2, iso: $iso) { city { id } }, departure3:airport (iata: $dep3, iso: "
+             "$iso) { city { id } }, providerIata{ provider iata provider_iata_id }, compareUnit (iata: $iata, "
+             "country: $iso, route: $route) { provider_name provider_img search_url disallowed_trip_type } }")
 
 sleep = time.sleep
 _local = threading.local()
 _searching = threading.Lock()
 _cache: dict = {}
 _spent: list[datetime] = []
+_graphed: list[datetime] = []
 _blocked: list[datetime | None] = [None]
 
 
@@ -108,22 +122,23 @@ def key(legs):
     return ".".join(f"{o}-{d}.{int(day[8:])}-{int(day[5:7])}-{day[:4]}" for o, d, day in legs)
 
 
-def search(legs, adults, cabin):
-    """The result's offers and the search's cost: 0 when the same search ran in the last CACHE_FOR, else 1.
-    complete is False when meta did not reach final within POLLS: the slowest sellers are missing. An empty result
-    is not kept: the metasearch sometimes answers final with no itineraries for minutes, for a trip it sells."""
+def search(legs, adults, cabin, round_trip=False):
+    """The result and its cost: 0 when the same search ran in the last CACHE_FOR, else 1. complete: meta reached final
+    within POLLS. history: a round trip's 90-day average fare by day, or None. An empty result is not kept: the
+    metasearch sometimes answers empty for minutes."""
     k = (key(legs), adults, cabin)
     vars(_local).pop("spend", None)
     with _searching:
         hit = _cache.get(k)
         if hit and models.now() - hit[0] < CACHE_FOR:
             return hit[1], 0
+        history = _page(legs, round_trip)
         params = {"s": k[0], "countryCode": "AR", "numAdults": adults, "currency": "USD"}
         if cabin != "ECONOMY":
             params["cabinClass"] = CABINS[cabin]
         started = _get("/flights/search", params)
         _spent.append(models.now())
-        _local.spend = (_proxy("POST", "/budget/spend"),)
+        _local.spend = (_proxy("POST", "/budget/spend"), models.now())
         sid = started.get("searchId") if isinstance(started, dict) else None
         if not sid:
             raise MetasearchUnreadable("The search started without an id")
@@ -134,33 +149,89 @@ def search(legs, adults, cabin):
                 final = True
                 break
         body = unpack(_get(f"/flights/rpull/{sid}", {"v": "final"}))
-        result = {"offers": offers(body), "matrix": body.get("matrix") or [], "complete": final}
+        result = {"offers": offers(body), "matrix": body.get("matrix") or [], "complete": final, "history": history}
         if result["offers"]:
             _cache[k] = (models.now(), result)
         return result, 1
 
 
+def _page(legs, round_trip):
+    """The results page's GraphQL query, sent before each search as the web sends it. A round trip's 90-day history
+    by day, or None."""
+    (origin, destination, day), *rest = legs
+    variables = {"iso": "AR", "iata": origin, "iata2": "", "iata3": "", "dep2": "", "dep3": "",
+                 "route": f"{origin}-{destination}"}
+    if not round_trip:
+        for n, (leg_origin, leg_destination, _) in zip((2, 3), rest):
+            variables[f"iata{n}"], variables[f"dep{n}"] = leg_destination, leg_origin
+    variables |= {"arr": destination, "outbound": day}
+    if rest:
+        variables["inbound"] = rest[0][2]
+    variables["currency"] = "USD"
+    query = (PAGE_HEAD + (PAGE_ROUND_TRIP if round_trip else "") + ") { " + (PAGE_HISTORY if round_trip else "")
+             + PAGE_BODY)
+    try:
+        data = _get("/graphql-cdn", {"query": query, "variables": json.dumps(variables, separators=(",", ":"))},
+                    {"device": "desktop"}, PAGE_TIMEOUT)
+    except (MetasearchBlocked, MetasearchChallenge):
+        raise
+    except MetasearchError:
+        return None
+    rows = (data.get("data") or {}).get("statsLast90") if isinstance(data, dict) else None
+    return _days(rows) if round_trip and isinstance(rows, list) else None
+
+
+def _days(rows):
+    return sorted((r["created"], round(r["avg_price"], 2)) for r in rows
+                  if isinstance(r, dict) and _amount(r.get("avg_price")) and r.get("created"))
+
+
 def budget():
-    """Searches from this IP in the last hour by every session, as the proxy counts them, against the most that never
-    got an IP blocked, with the IP's live block and a warning when either calls for asking the user first. Without the
-    proxy, this session's own count, shared False. Takes the reply search() kept, else asks the proxy once."""
+    """The IP's streak and block across sessions, from the proxy, with a warning when either calls for asking the user
+    first; without the proxy, this session's own. Takes the reply search() kept, else asks the proxy once."""
     kept = vars(_local).pop("spend", None)
     reply = kept[0] if kept else _proxy("GET", "/budget")
     if reply:
-        out = {"used_last_hour": reply["used_last_hour"], "safe_per_hour": SAFE_PER_HOUR, "shared": True}
-        if reply.get("blocked_at"):
-            out["blocked_at"] = reply["blocked_at"]
+        used, streak, blocked = reply["used_last_hour"], reply, reply.get("blocked_at")
+        if kept and "streak_seconds" in reply:  # kept before the polls, so it is that much older
+            aged = int((models.now() - kept[1]).total_seconds())
+            streak = {} if aged >= reply["streak_resets_in"] else reply | {
+                "streak_seconds": reply["streak_seconds"] + aged, "streak_resets_in": reply["streak_resets_in"] - aged}
     else:
-        hour_ago = models.now() - timedelta(hours=1)
-        out = {"used_last_hour": sum(1 for t in _spent if t > hour_ago), "safe_per_hour": SAFE_PER_HOUR, "shared": False}
-    if "blocked_at" in out:
-        out["warning"] = (f"The metasearch blocked this IP at {out['blocked_at']}: another search may extend the block "
-                          "for hours. Ask the user before another one")
-    elif out["used_last_hour"] >= SAFE_PER_HOUR:
-        whose = "from this IP" if out["shared"] else "from this session"
-        out["warning"] = (f"{out['used_last_hour']} searches {whose} in the last hour reach the safe limit of "
-                          f"{SAFE_PER_HOUR}: another may get the IP blocked for hours. Ask the user before another one")
+        now = models.now()
+        used, streak, blocked = sum(1 for t in _spent if t > now - timedelta(hours=1)), _streak(now), None
+    out = {"used_last_hour": used}
+    if "streak_started_at" in streak:
+        out["streak_started_at"] = streak["streak_started_at"]
+    out |= {"streak_seconds": streak.get("streak_seconds", 0), "safe_streak_seconds": SAFE_STREAK,
+            "shared": bool(reply)}
+    if blocked:
+        out["blocked_at"] = blocked
+        out["warning"] = (f"The metasearch blocked this IP at {blocked}: another search may extend the block for "
+                          "hours. Ask the user before another one")
+    elif out["streak_seconds"] >= SAFE_STREAK:
+        whose = "This IP" if reply else "This session"
+        out["warning"] = (f"{whose} has searched the metasearch for {out['streak_seconds']} s in a row, and another "
+                          "search may get the IP blocked for hours; the streak ends after "
+                          f"{streak['streak_resets_in']} s with no search. Ask the user before another one")
     return out
+
+
+def _streak(now):
+    """The proxy's streak fields from this session's own searches."""
+    first = last = None
+    for t, kind in sorted([(t, 1) for t in _spent] + [(t, 0) for t in _graphed]):
+        if kind == 0:
+            first = last = None
+        else:
+            if last is None or (t - last).total_seconds() >= RESET:
+                first = t
+            last = t
+    if last is None or (now - last).total_seconds() >= RESET:
+        return {}
+    return {"streak_started_at": first.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "streak_seconds": int((now - first).total_seconds()),
+            "streak_resets_in": int(RESET - (now - last).total_seconds())}
 
 
 def calendar(origin, destination, month, round_trip, outbound=None):
@@ -184,17 +255,9 @@ def months(origin, destination, round_trip):
                   if _amount(r.get("minprice")) and r.get("year") and r.get("month"))
 
 
-def history(origin, destination, outbound, inbound):
-    """Average fare per day of the last 90 days for this round trip, as (YYYY-MM-DD, price) by day. Free: GraphQL.
-    Only round trips have it, and only some routes: none for one ways in 12 of 12 routes tried."""
-    rows = _graph(f'statsLast90(currency: "USD", iso: "AR", departure: "{origin}", arrival: "{destination}", '
-                  f'outbound: "{outbound}", inbound: "{inbound}") {{ avg_price created }}')
-    return sorted((r["created"], round(r["avg_price"], 2)) for r in rows if _amount(r.get("avg_price")) and r.get("created"))
-
-
 def _graph(field):
-    """The rows of one GraphQL field, aliased r. The query goes in the URL, as the web client sends it, so the CDN can
-    keep it a minute; every value in it was validated before."""
+    """The rows of one GraphQL field, aliased r, with the query in the URL as the web sends it; its values were
+    validated before."""
     data = _get("/graphql-cdn", {"query": f"query {{ r: {field} }}"}, {"device": "desktop"})
     rows = (data.get("data") or {}).get("r") if isinstance(data, dict) else None
     if not isinstance(rows, list) or data.get("errors"):
@@ -325,13 +388,13 @@ def _link(encoded):
     return links.short(url) if url.startswith("https://") else None
 
 
-def _get(path, params, headers=None):
-    """GET one API path and return its JSON; a block, a challenge or a refusal raises its own error. After a block,
-    this session asks nothing more: the API refuses the whole IP for hours, and another try only prolongs it."""
+def _get(path, params, headers=None, timeout=TIMEOUT):
+    """GET one API path and return its JSON; a block, a challenge or a refusal raises its own error. After a block
+    this session asks nothing more: another try only prolongs it."""
     if _blocked[0]:
         raise MetasearchBlocked(f"The metasearch blocked this IP at {_blocked[0]:%H:%M} UTC", hint=BLOCKED_HINT)
     try:
-        response = _session().get(f"{API}{path}", params=params, headers=headers, timeout=TIMEOUT)
+        response = _session().get(f"{API}{path}", params=params, headers=headers, timeout=timeout)
     except Exception as e:
         raise _wrap(e) from e
     if response.headers.get("cf-mitigated"):
@@ -348,6 +411,9 @@ def _get(path, params, headers=None):
         raise MetasearchUnreadable("The metasearch refused the dates query: its API changed")
     if response.status_code != 200:
         raise MetasearchRefused(f"The metasearch answered HTTP {response.status_code}")
+    if path == "/graphql-cdn" and response.headers.get("cf-cache-status") in ORIGIN:
+        _graphed.append(models.now())
+        _proxy("POST", "/budget/graphql")
     try:
         return response.json()
     except ValueError as e:
@@ -355,8 +421,8 @@ def _get(path, params, headers=None):
 
 
 def _proxy(method, path):
-    """The proxy's budget for this IP, {"used_last_hour", maybe "blocked_at"}, or None when it cannot give one. Plain
-    HTTP to the proxy itself: http.client reads no proxy env, so HTTP_PROXY does not route it elsewhere."""
+    """The proxy's budget reply for this IP, or None when it cannot give one. http.client reads no proxy env, so
+    HTTP_PROXY does not route it elsewhere."""
     try:
         connection = http.client.HTTPConnection("proxy", 3128, timeout=10)
         try:
@@ -370,7 +436,11 @@ def _proxy(method, path):
         return None
     if not isinstance(reply, dict) or type(reply.get("used_last_hour")) is not int:
         return None
-    if "blocked_at" in reply and not isinstance(reply["blocked_at"], str):
+    if any(name in reply and not isinstance(reply[name], str) for name in ("blocked_at", "streak_started_at")):
+        return None
+    if any(name in reply and type(reply[name]) is not int for name in ("streak_seconds", "streak_resets_in")):
+        return None
+    if "streak_started_at" in reply and not {"streak_seconds", "streak_resets_in"} <= reply.keys():
         return None
     return reply
 

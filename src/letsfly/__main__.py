@@ -48,7 +48,8 @@ def main():
     if "budget" in out:
         budget = out["budget"]
         whose = "" if budget["shared"] else " (this session only: the proxy could not count the others)"
-        print(f"Cost: {out['cost']} search; {budget['used_last_hour']} of {budget['safe_per_hour']} in the last hour{whose}")
+        print(f"Cost: {out['cost']} search; streak of {budget['streak_seconds']} s, of a safe "
+              f"{budget['safe_streak_seconds']} s{whose}")
         if budget.get("warning"):
             print(f"Warning: {budget['warning']}")
 
@@ -56,7 +57,7 @@ def main():
 def _flights(out):
     for row in out["flights"]:
         price = f"{out['currency']} {row['price']:.0f}" if row["price"] is not None else "price unknown"
-        seller = f"  from {row['sellers'][0]['name']}" if row.get("sellers") else ""
+        seller = f"  from {row['seller']}" if row.get("seller") else ""
         yield f"{price}  {row['airlines']}{seller}" + ("  (separate tickets)" if row.get("self_transfer") else "")
         for leg in (row["out"], row.get("back")):
             if leg:

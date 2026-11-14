@@ -37,11 +37,9 @@ class FilteredOut(FlightsError):
 
 
 def flights(search):
-    """One way: itineraries, cheapest first. Round trip: (outbound, return) pairs for 5 outbounds, the cheapest,
-    with those the airlines asked for sell first. Without any, raises why: NoFlights, NoReturnFlights, NoRoundTripFare,
-    FilteredOut, or the error of a page that failed.
-    Also returns how many of those outbounds lost their returns because the page failed to load, and Google's price
-    reference, which only a first page carries: an unfiltered one, since airlines change it and a window empties it."""
+    """(trips, outbounds whose return page failed, Google's price reference). Trips: one way, itineraries cheapest
+    first; round trip, (outbound, return) pairs for the 5 cheapest outbounds, the airlines' own first. Without any,
+    raises why. The reference comes from an unfiltered first page: airlines change it and a window empties it."""
     unfiltered = replace(search, airlines=set(), window=None, return_window=None)
     plain = POOL.submit(_page, unfiltered) if unfiltered != search else None
     try:
