@@ -55,6 +55,34 @@ class FiltersInTheUrl(unittest.TestCase):
         self.assertFalse({6, 8, 9} & direction.keys())
 
 
+class CurrencyParam(Pages):
+    def test_a_code_google_answers_in_dollars_fails_before_any_page(self):
+        asked = []
+        client.fetch = lambda url: asked.append(url)
+        listed = "Use one of the codes currency lists"
+        for code, hint in (("RMB", listed), ("NTD", listed), ("ARG", "Use ARS"), ("ZZZ", listed), ("MNT", listed),
+                           ("XAU", listed), ("", None)):
+            for out in (tools.search_flights("EZE", "MIA", OUT, currency=code),
+                        tools.cheapest_dates("EZE", "MIA", OUT, RETURN, currency=code)):
+                with self.subTest(code):
+                    error = out["error"]
+                    self.assertEqual((error["type"], error["param"]), ("invalid_input", "currency"))
+                    self.assertEqual(error.get("hint"), hint)
+        self.assertEqual(asked, [])
+
+    def test_a_code_it_prices_in_goes_to_google_and_back_in_capitals(self):
+        urls = []
+
+        def fetch(url):
+            urls.append(url)
+            return page([REGIONAL])
+        client.fetch = fetch
+        out = tools.search_flights("EZE", "MIA", OUT, currency="uyu")
+        self.assertEqual(out["currency"], "UYU")
+        self.assertEqual(tools.cheapest_dates("EZE", "MIA", OUT, RETURN, currency="uyu")["currency"], "UYU")
+        self.assertTrue(urls and all(url.endswith("&curr=UYU") for url in urls), urls)
+
+
 class ReturnWindowParam(Pages):
     def test_it_needs_a_return_date(self):
         error = tools.search_flights("EZE", "MIA", OUT, return_window="18-23")["error"]

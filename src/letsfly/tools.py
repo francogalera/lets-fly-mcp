@@ -23,6 +23,8 @@ Airports = Annotated[str, "IATA code, or several separated by commas (EZE,AEP)"]
 Day = Annotated[str, "Date YYYY-MM-DD, up to 329 days ahead"]
 Stops = Literal["ANY", "NON_STOP", "ONE_STOP", "TWO_PLUS_STOPS"]
 Currency = Annotated[str, "Currency of every price"]
+CurrencyCode = Annotated[str, f"ISO 4217 code of every price; Google Flights prices in these {len(params.CURRENCIES)}: "
+                              f"{' '.join(sorted(params.CURRENCIES))}"]
 Link = Annotated[str, f"Short local link ({links.BASE}/<id>) that opens the real page"]
 CODESHARE_ROWS = 3
 
@@ -275,7 +277,7 @@ def search_flights(
     return_window: Annotated[str | None, "Hours the return may leave, for example 18-23, up to 23:59; needs return_date"] = None,
     adults: Annotated[int, Range(1, 9)] = 1,
     cabin: Literal["ECONOMY", "PREMIUM_ECONOMY", "BUSINESS", "FIRST"] = "ECONOMY",
-    currency: str = "USD",
+    currency: CurrencyCode = "USD",
     limit: Annotated[int, Range(1, 20)] = 5,
     all_links: Annotated[bool, "Booking link on every row; by default only the first 2 rows carry one"] = False,
 ) -> FlightsResult:
@@ -291,6 +293,7 @@ def search_flights(
                                  return_window, adults, cabin, currency)
     found, lost, reference = search.flights(query)
     asked, shared = search.split(found, query.airlines)
+    currency = query.currency
     rows = _flight_rows(asked, query, currency, limit, all_links)
     out = {"currency": currency, "count": len(rows), "flights": rows}
     if shared:
@@ -331,7 +334,7 @@ def cheapest_dates(
     trip_days: Annotated[int | None, Range(1), "Length of stay in days; without it the search is one way"] = None,
     adults: Annotated[int, Range(1, 9)] = 1,
     max_stops: Stops = "ANY",
-    currency: str = "USD",
+    currency: CurrencyCode = "USD",
     limit: Annotated[int, Range(1, 60)] = 10,
 ) -> DatesResult:
     """Lowest price per departure date, cheapest first, 93 dates at most. price: for all adults, for the round trip
@@ -341,7 +344,7 @@ def cheapest_dates(
     found, missing = search.dates(query, days, trip_days)
     rows = [{"date": day, **({"return": back} if back else {}), "price": price}
             for day, back, price in sorted(found, key=lambda d: d[2])[:limit]]
-    out = {"currency": currency, "count": len(rows), "dates": rows}
+    out = {"currency": query.currency, "count": len(rows), "dates": rows}
     if missing:
         out["missing_dates"] = missing
     elif not rows:

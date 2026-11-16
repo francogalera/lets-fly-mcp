@@ -11,6 +11,15 @@ SEATS = {"ECONOMY": 1, "PREMIUM_ECONOMY": 2, "BUSINESS": 3, "FIRST": 4}
 MAX_PAST_FROM_DAYS = 6
 # Google refuses a date further ahead than this, counted from today in UTC
 MAX_AHEAD_DAYS = 329
+# The ISO 4217 codes Google Flights prices in, checked live one by one. It answers any other code in US dollars, and
+# ERN, FKP, KPW, SSP, SYP and ZWG with no flights at all
+CURRENCIES = frozenset((
+    "AED AFN ALL AMD AOA ARS AUD AWG AZN BAM BBD BDT BHD BIF BMD BND BOB BRL BSD BTN BWP BYN BZD CAD CDF CHF "
+    "CLP CNY COP CRC CUP CVE CZK DJF DKK DOP DZD EGP ETB EUR FJD GBP GEL GHS GIP GMD GNF GTQ GYD HKD HNL HTG "
+    "HUF IDR ILS INR IQD IRR ISK JMD JOD JPY KES KGS KHR KMF KRW KWD KYD KZT LAK LBP LKR LRD LSL LYD MAD MDL "
+    "MGA MKD MMK MOP MRU MUR MVR MWK MXN MYR MZN NAD NGN NIO NOK NPR NZD OMR PAB PEN PGK PHP PKR PLN PYG QAR "
+    "RON RSD RUB RWF SAR SBD SCR SDG SEK SGD SOS SRD SVC SZL THB TJS TMT TND TOP TRY TTD TWD TZS UAH UGX USD "
+    "UYU UZS VES VND XAF XCD XCG XOF XPF YER ZAR ZMW").split())
 
 
 def flight_search(origin, destination, date, return_date, max_stops, airlines, window, return_window, adults, cabin,
@@ -86,11 +95,15 @@ def departure_window(window, param="departure_window"):
 
 
 def parse_currency(currency):
-    if not currency:
-        return None
     code = currency.strip().upper()
     if len(code) != 3 or not code.isalpha():
         raise ParseError(f"'{currency}' is not a currency code: three letters, as USD or ARS", "currency")
+    if code not in CURRENCIES:
+        # An ISO code starts with its country's code, so a typo in the last letter keeps the country. X codes
+        # (metals, units of account, regional francs) have no country
+        near = [] if code[0] == "X" else sorted(c for c in CURRENCIES if c[:2] == code[:2])
+        raise ParseError(f"Google Flights does not price in '{code}'", "currency",
+                         f"Use {' or '.join(near)}" if near else "Use one of the codes currency lists")
     return code
 
 
