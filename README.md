@@ -2,7 +2,7 @@
 
 Very fast flight search for your terminal, and an MCP server for your agent: real Google Flights fares and the cheapest dates in a range, every seller's fares from a flight metasearch that compares agencies and airlines, with short links to the booking pages. Over MCP, Claude Code, Claude Desktop, Codex and ChatGPT Desktop also get the deals published on promociones-aereas.com.ar. On Linux and macOS. Secure by default: it runs sandboxed in Docker and reaches only the sites it reads, with no API keys and no accounts.
 
-https://github.com/user-attachments/assets/ba088c53-7c51-45d6-8dc2-bc8a7e4ef1d4
+![An MCP server for your agent in Claude Desktop, then flight search in the terminal](https://github.com/user-attachments/assets/19d72cf7-3349-45ba-b9f8-ff53cff19ce3)
 
 ## Conventions
 
