@@ -2,8 +2,7 @@
 import re
 from typing import Annotated, Literal, NotRequired, TypedDict
 
-from letsfly import airports, links, metasearch, models, params, promos, search
-from letsfly.errors import Failure
+from letsfly import airports, links, metasearch, models, params, search
 from letsfly.models import ParseError, ValidationError
 from letsfly.mcp import Range, serve, tool
 from letsfly.tfs import booking_link
@@ -14,11 +13,9 @@ INSTRUCTIONS = (
     "exactly as returned: never build, edit, shorten or join links. Fixed dates: search_flights on them. Flexible "
     "dates: cheapest_dates first, then search_flights on the best dates. No flights is an error that says why. A "
     "tool error carries a hint: follow it and retry.\n"
-    "Use only airport codes find_airports returned or a flight tool accepted. Call promociones-aereas only when the "
-    "user asks for deals or packages and names an origin in Argentina, with no flight tool: it reads a blog at about "
-    "5 s per request, so list with details=false first, then read at most 3 deals. Answer in the language of the "
-    "request, cheapest option first (a nonstop or single ticket up to 10% dearer may lead, saying why), with its "
-    "price, bags, route, times and link.\n"
+    "Use only airport codes find_airports returned or a flight tool accepted. Answer in the language of the request, "
+    "cheapest option first (a nonstop or single ticket up to 10% dearer may lead, saying why), with its price, bags, "
+    "route, times and link.\n"
     "metasearch_flights is EXPENSIVE: explore with the free tools, then call it once per request on the chosen trip."
 )
 
@@ -115,53 +112,6 @@ class Airport(TypedDict):
 
 class AirportsResult(TypedDict):
     airports: Annotated[list[Airport], "Best match first"]
-
-
-class Featured(TypedDict):
-    hotel: Annotated[str, "Hotel name"]
-    out: Annotated[str | None, "Departure date, YYYY-MM-DD"]
-    back: Annotated[str | None, "Return date, YYYY-MM-DD"]
-    meal_plan: Annotated[str, "Meal plan, as the package link names it"]
-    link: Link
-
-
-class DealDate(TypedDict):
-    out: Annotated[str, "Departure date, YYYY-MM-DD"]
-    back: Annotated[str, "Return date, YYYY-MM-DD"]
-    to: NotRequired[Annotated[str, "Destination airport, when the link names one"]]
-    days: Annotated[int | None, "Length of stay in days"]
-    direct: Annotated[bool, "The blog lists it as a direct flight"]
-    link: Link
-
-
-class Details(TypedDict):
-    prices_seen_at: NotRequired[Annotated[str, "When the blog saw the prices, Argentina time"]]
-    expired: Annotated[bool, "The blog marks the post as expired"]
-    notes: Annotated[list[str], "The post's opening paragraphs"]
-    badges: NotRequired[Annotated[list[str], "Labels the blog puts on the post"]]
-    featured: NotRequired[Annotated[list[Featured], "Hotels a package features"]]
-    other_occupancy: NotRequired[Annotated[dict[str, str], "Room occupancy, named as on the blog, to the link of its dates"]]
-    fields: NotRequired[Annotated[dict[str, str], "The post's labelled facts: airline, baggage, payment terms"]]
-    dates_total: NotRequired[Annotated[int, "How many dates the post had, when more than the 60 listed"]]
-    dates: Annotated[list[DealDate], "Dates on sale, each with its own link and no price"]
-
-
-class Deal(TypedDict):
-    published: Annotated[str | None, "When the post went up, YYYY-MM-DD HH:MM Argentina time"]
-    type: Annotated[Literal["package", "flight", "hotel", "car", "activity", "note"], "What the deal sells"]
-    title: Annotated[str, "The post's title"]
-    price_from: Annotated[float | None, "The title's starting price: the lowest when the post was written"]
-    currency: Annotated[Literal["USD", "ARS"] | None, "Currency of price_from"]
-    basis: NotRequired[Annotated[str, "What price_from covers: per person, per night"]]
-    origin: NotRequired[Annotated[str, "Departure city the title names"]]
-    url: Annotated[str, "The post"]
-    details: NotRequired[Annotated[Details | Failure, "The post read in full, or the error that kept it from it"]]
-
-
-class DealsResult(TypedDict):
-    source: Annotated[str, "The blog"]
-    count: Annotated[int, "Deals returned"]
-    deals: Annotated[list[Deal], "Newest first"]
 
 
 Code = Annotated[str, "One IATA airport code, or a city code the metasearch opens into its airports (BUE: EZE and AEP)"]
@@ -603,25 +553,6 @@ def find_airports(
     A city with several airports, by name or by IATA city code (BUE, LON), lists all of them first. The flight tools
     take those airport codes, never a city code."""
     return {"airports": airports.search(query, limit)}
-
-
-@tool("promociones-aereas")
-def promociones_aereas(
-    query: Annotated[str, "What to look for, in Spanish like the blog: destination, airline or origin (punta cana, paquetes brasil). Empty: the latest posts"] = "",
-    type: Literal["any", "package", "flight", "hotel", "car", "activity"] = "any",
-    page: Annotated[int, Range(1, 10), "Feed page, 15 posts per page, newest first"] = 1,
-    limit: Annotated[int, Range(1, 15), "How many deals to return, each with its details (about 5 s per deal)"] = 5,
-    details: Annotated[bool, "Each deal's dates, links and terms; false for a quick scan of titles"] = True,
-    month: Annotated[str | None, "Only departure dates in that month, YYYY-MM"] = None,
-    stay_days: Annotated[int | None, Range(1, 60), "Only stays of that many days, ±1"] = None,
-) -> DealsResult:
-    """Deals on promociones-aereas.com.ar, an Argentine blog, newest first. Call it only when the user asks for deals
-    or packages and names an origin in Argentina. price_from: the title's starting price when the post was written
-    (prices_seen_at), not per date; currency can be ARS. details: dates on sale with their link and to (destination
-    airport) when known, fields (airline, baggage, payment), featured hotels and notes, or an error object. A package
-    lists the dates of its base room occupancy, other_occupancy links the rest. Dates carry no price: check one with
-    search_flights only if the user asks."""
-    return promos.search(query, type, page, limit, details, month, stay_days)
 
 
 if __name__ == "__main__":

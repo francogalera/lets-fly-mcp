@@ -19,7 +19,7 @@ if command -v sha256sum >/dev/null; then SHA=(sha256sum); else SHA=(shasum -a 25
 IMAGE="lets-fly-core:$(cd "$HERE" && find src/letsfly docker -type f ! -path '*/__pycache__/*' -print0 | LC_ALL=C sort -z |
   xargs -0 "${SHA[@]}" | "${SHA[@]}" | cut -c1-12)"
 PROXY_IMAGE="lets-fly-proxy:$("${SHA[@]}" "$HERE/docker/proxy.py" | cut -c1-12)"
-ALLOW=www.google.com,promociones-aereas.com.ar,api.turismocity.com
+ALLOW=www.google.com,api.turismocity.com
 METASEARCH=api.turismocity.com
 LOG="${XDG_STATE_HOME:-$HOME/.local/state}/flights/egress.log"
 # Not XDG_STATE_HOME: the service and some clients start without it, and every caller must find the same folder

@@ -15,7 +15,7 @@ from unittest import mock
 from letsfly import links
 
 URL = "https://www.google.com/travel/flights/booking?tfs=CBwQAhoeEgoyMDI2LTEyLTEw&curr=USD&hl=en"
-DEAL = "https://promociones-aereas.com.ar/cancún-desde-buenos-aires.html"
+SELLER = "https://www.seller.example/cancún-desde-buenos-aires.html"
 OLD = "https://www.google.com/travel/flights/booking?tfs=old"
 
 
@@ -52,10 +52,10 @@ class Record(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root:
             path = os.path.join(root, "2027", "03", "24", "164737-mcp-1.tsv")
             passthrough = io.StringIO()
-            links.record(io.StringIO(line(URL) + "Traceback (most recent call last):\n" + line(URL) + line(DEAL)),
+            links.record(io.StringIO(line(URL) + "Traceback (most recent call last):\n" + line(URL) + line(SELLER)),
                          path, passthrough)
             with open(path, encoding="utf-8") as f:
-                self.assertEqual(f.read(), f"{links.key(URL)}\t{URL}\n{links.key(DEAL)}\t{DEAL}\n")
+                self.assertEqual(f.read(), f"{links.key(URL)}\t{URL}\n{links.key(SELLER)}\t{SELLER}\n")
             self.assertEqual(passthrough.getvalue(), "Traceback (most recent call last):\n")
 
     def test_a_session_without_links_leaves_no_file(self):
@@ -79,7 +79,7 @@ class Record(unittest.TestCase):
             blocker = os.path.join(root, "2027")
             open(blocker, "w").close()  # a file where the year's folder goes
             passthrough = io.StringIO()
-            links.record(io.StringIO(line(URL) + "Traceback\n" + line(DEAL) + "after\n"),
+            links.record(io.StringIO(line(URL) + "Traceback\n" + line(SELLER) + "after\n"),
                          os.path.join(blocker, "03", "24", "x.tsv"), passthrough)
             out = passthrough.getvalue().splitlines()
             self.assertEqual([x for x in out if not x.startswith("flights: ")], ["Traceback", "after"])
@@ -89,12 +89,12 @@ class Record(unittest.TestCase):
         not_utf8 = b"LINK abcdefgh https://example.test/\xff\n"  # passes through as it came
         with tempfile.TemporaryDirectory() as root:
             r = subprocess.run([sys.executable, "-I", "-X", "utf8=0", links.__file__, "record", root, "mcp-1"],
-                               input=(line(DEAL) + "año\n").encode() + not_utf8, capture_output=True, timeout=30,
+                               input=(line(SELLER) + "año\n").encode() + not_utf8, capture_output=True, timeout=30,
                                env={"LC_ALL": "C", "PATH": os.environ.get("PATH", "")})
             self.assertEqual(r.stderr, "año\n".encode() + not_utf8)
             [path] = [os.path.join(d, f) for d, _, files in os.walk(root) for f in files]
             with open(path, encoding="utf-8") as f:
-                self.assertEqual(f.read(), f"{links.key(DEAL)}\t{DEAL}\n")
+                self.assertEqual(f.read(), f"{links.key(SELLER)}\t{SELLER}\n")
 
 
 class Server(unittest.TestCase):
@@ -128,12 +128,12 @@ class Server(unittest.TestCase):
         self.assertEqual(self.get(f"/{links.key(URL)}", method="HEAD"), (302, URL, b""))
 
     def test_a_session_that_starts_after_the_server_opens_too(self):
-        links.record(io.StringIO(line(DEAL)), os.path.join(self.root, "2027", "03", "25", "090000-mcp-2.tsv"),
+        links.record(io.StringIO(line(SELLER)), os.path.join(self.root, "2027", "03", "25", "090000-mcp-2.tsv"),
                      io.StringIO())
-        self.assertEqual(self.get(f"/{links.key(DEAL)}")[0], 302)
+        self.assertEqual(self.get(f"/{links.key(SELLER)}")[0], 302)
 
     def test_a_link_appended_after_a_refresh_opens_too(self):
-        self.assertEqual(self.get(f"/{links.key(DEAL)}")[0], 404)
+        self.assertEqual(self.get(f"/{links.key(SELLER)}")[0], 404)
         with open(self.session, "a", encoding="utf-8") as f:
             f.write(f"{links.key(URL + '&x=1')}\t{URL}&x=1\n")
         self.assertEqual(self.get(f"/{links.key(URL + '&x=1')}")[:2], (302, URL + "&x=1"))
@@ -144,9 +144,9 @@ class Server(unittest.TestCase):
         self.assertEqual(opened.call_count, 0)
 
     def test_a_url_beyond_ascii_goes_out_percent_encoded(self):
-        links.record(io.StringIO(line(DEAL)), self.session, io.StringIO())
-        self.assertEqual(self.get(f"/{links.key(DEAL)}")[:2],
-                         (302, "https://promociones-aereas.com.ar/canc%C3%BAn-desde-buenos-aires.html"))
+        links.record(io.StringIO(line(SELLER)), self.session, io.StringIO())
+        self.assertEqual(self.get(f"/{links.key(SELLER)}")[:2],
+                         (302, "https://www.seller.example/canc%C3%BAn-desde-buenos-aires.html"))
 
     def test_anything_else_is_not_found(self):
         port = self.httpd.server_address[1]
@@ -159,11 +159,11 @@ class Server(unittest.TestCase):
         partial = os.path.join(self.root, "2027", "03", "26", "100000-mcp-3.tsv")
         os.makedirs(os.path.dirname(partial))
         with open(partial, "w", encoding="utf-8") as f:
-            f.write(f"{links.key(DEAL)}\t{DEAL[:30]}")
-        self.assertEqual(self.get(f"/{links.key(DEAL)}")[0], 404)
+            f.write(f"{links.key(SELLER)}\t{SELLER[:30]}")
+        self.assertEqual(self.get(f"/{links.key(SELLER)}")[0], 404)
         with open(partial, "a", encoding="utf-8") as f:
-            f.write(f"{DEAL[30:]}\n")
-        self.assertEqual(self.get(f"/{links.key(DEAL)}")[0], 302)
+            f.write(f"{SELLER[30:]}\n")
+        self.assertEqual(self.get(f"/{links.key(SELLER)}")[0], 302)
 
 
 class Ensure(unittest.TestCase):

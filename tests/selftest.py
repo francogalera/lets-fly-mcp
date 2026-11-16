@@ -251,9 +251,8 @@ def main():
     try:
         mcp.start()
         schemas = {t["name"]: t.get("outputSchema") for t in mcp.call("tools/list")["result"]["tools"]}
-        need = {"search_flights", "cheapest_dates", "find_airports", "promociones-aereas", "metasearch_flights",
-                "metasearch_dates"}
-        check("MCP: clean output and the 6 tools", set(schemas) == need, ", ".join(sorted(schemas)))
+        need = {"search_flights", "cheapest_dates", "find_airports", "metasearch_flights", "metasearch_dates"}
+        check("MCP: clean output and the 5 tools", set(schemas) == need, ", ".join(sorted(schemas)))
         res = mcp.call("tools/call", {"name": "search_flights", "arguments": {
             "origin": ROUTE[0], "destination": ROUTE[1], "date": DATE, "return_date": RETURN}})["result"]
         text = res["content"][0]["text"]
@@ -276,19 +275,6 @@ def main():
               else problem(data))
         fits("cheapest_dates", schemas.get("cheapest_dates"), res)
         live_metasearch(mcp, schemas)
-        res = mcp.call("tools/call", {"name": "promociones-aereas", "arguments": {"limit": 5, "details": False}})["result"]
-        text = res["content"][0]["text"]
-        deals = json.loads(text).get("deals", [])
-        check("MCP: promociones-aereas, short list", bool(deals) and all(d.get("url") for d in deals) and len(text) < 4000,
-              f"{len(deals)} deals, {len(text)} characters" if deals else text[:200])
-        fits("promociones-aereas", schemas.get("promociones-aereas"), res)
-        res = mcp.call("tools/call", {"name": "promociones-aereas", "arguments": {"type": "package", "limit": 3}})["result"]
-        text = res["content"][0]["text"]
-        # The newest package can be a coupon, a real post with no dates
-        det = next((d["details"] for d in json.loads(text).get("deals", []) if d.get("details", {}).get("dates")), {})
-        check("MCP: promociones-aereas with details by default (keeps 5 s between requests)", bool(det.get("prices_seen_at") and det.get("dates")),
-              f"{len(det.get('dates', []))} dates, prices from {det.get('prices_seen_at')}" if det else text[:200])
-        fits("promociones-aereas with details", schemas.get("promociones-aereas"), res)
         verdict = probe_network(mcp.p.pid)
         check("network: google passes, example.com 403, no direct connection",
               verdict == "200 403 no network", verdict or "could not find the session network")
@@ -304,7 +290,9 @@ def main():
     term = Mcp()
     try:
         term.start()
-        term.call("tools/call", {"name": "promociones-aereas", "arguments": {"limit": 1, "details": False}})
+        # A call that goes out through the proxy, so the egress log below has this session
+        term.call("tools/call", {"name": "search_flights", "arguments": {"origin": ROUTE[0], "destination": ROUTE[1],
+                                                                         "date": DATE}})
         start = time.monotonic()
         for sig, grace in ((signal.SIGINT, 0.1), (signal.SIGTERM, 0.4), (signal.SIGKILL, 10)):
             term.p.send_signal(sig)

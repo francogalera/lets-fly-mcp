@@ -7,26 +7,11 @@ from unittest import mock
 
 from fake_pages import days, leg, page, reference, row
 import fake_metasearch
-from letsfly import client, errors, mcp, metasearch, models, promos, tools
+from letsfly import client, errors, mcp, metasearch, models, tools
 from test_decode import BACK, GLUED, NIGHT, NOW, REGIONAL
 from test_mcp import converse
 
-TOOLS = ("search_flights", "cheapest_dates", "find_airports", "promociones-aereas", "metasearch_flights",
-         "metasearch_dates")
-FEED = ("<rss><channel><item><title>Paquetes a Cancún desde Buenos Aires por U$D 1.234 por persona en base doble</title>"
-        "<link>https://promociones-aereas.com.ar/cancun-schema-pa-p.html</link>"
-        "<pubDate>Sat, 31 Oct 2026 16:30:00 +0000</pubDate></item>"
-        "<item><title>Hotel</title><link>https://promociones-aereas.com.ar/alojamientos/schema.html</link></item>"
-        "</channel></rss>")
-POST = ("<p>Los precios se encontraban disponibles cuando se armó el post el 31/10/2026 a las 1:30</p>"
-        '<div id="post-content-container"><p>Paquete con vuelo y hotel en base doble, con desayuno incluido.</p>'
-        '<div class="bg-blue rounded-lg">Precio final</div>'
-        '<a href="https://pkg.test/p?hotel_name=H&meal_plans=AI&d=2027-03-01,2027-03-08">Ver este Paquete</a>'
-        '<a href="https://pkg.test/o?base=triple">Ver opciones en base triple</a>'
-        "<ul><li><strong>Aerolínea:</strong> Aerolíneas Argentinas</li></ul>"
-        "<table class='promos-tablas'><tr><td style='display:none;'>2027-03-01</td>"
-        "<td style='display:none;'>2027-03-08</td><td class='dias'>7</td><td class='escala'>Directo</td>"
-        "<td><a href='https://search.test/r?to=CUN&x=1'>ver</a></td></tr></table>También te puede interesar</div>")
+TOOLS = ("search_flights", "cheapest_dates", "find_airports", "metasearch_flights", "metasearch_dates")
 
 
 def fields(schema, path=""):
@@ -67,7 +52,6 @@ class OutputSchema(unittest.TestCase):
         paths = {name: dict(fields(schema)) for name, schema in self.schemas.items()}
         self.assertIn("flights[].out.layovers[].overnight", paths["search_flights"])
         self.assertIn("price_reference.history.weekly", paths["search_flights"])
-        self.assertIn("deals[].details.dates[].to", paths["promociones-aereas"])
         self.assertIn("error.hint", paths["find_airports"])
         self.assertEqual({"budget.shared", "budget.blocked_at", "budget.warning"} - paths["metasearch_flights"].keys(), set())
         for name, found in paths.items():
@@ -129,17 +113,6 @@ class OutputSchema(unittest.TestCase):
 
     def test_airports_fit(self):
         self.fits("find_airports", tools.find_airports("Londres"))
-
-    def test_deals_fit(self):
-        with mock.patch.object(promos, "_get", lambda url: FEED if "feed" in url else POST):
-            out = tools.promociones_aereas("cancun")
-            scan = tools.promociones_aereas(details=False)
-        package, hotel = out["deals"]
-        self.assertEqual(sorted(package["details"]),
-                         ["badges", "dates", "expired", "featured", "fields", "notes", "other_occupancy", "prices_seen_at"])
-        self.assertEqual(hotel["details"]["error"]["type"], "blog_forbidden")
-        self.fits("promociones-aereas", out)
-        self.fits("promociones-aereas", scan)
 
     def test_every_error_fits_every_tool(self):
         found = kinds(errors.FlightsError)
