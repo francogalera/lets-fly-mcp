@@ -7,9 +7,8 @@ from typing import Annotated, Literal, NotRequired, TypedDict
 Kind = Literal["internal", "invalid_arguments", "unknown_tool", "unknown_airport", "city_code", "invalid_input",
                "invalid_request", "google", "google_timeout", "google_connection", "google_certificate", "google_http",
                "google_page", "google_rejected", "no_flights", "no_return_flights", "no_round_trip_fare", "filtered_out",
-               "blog_unavailable", "blog_forbidden", "blog_unreadable", "metasearch", "metasearch_timeout",
-               "metasearch_connection", "metasearch_certificate", "metasearch_http", "metasearch_page",
-               "metasearch_blocked", "metasearch_challenge"]
+               "metasearch", "metasearch_timeout", "metasearch_connection", "metasearch_certificate", "metasearch_http",
+               "metasearch_page", "metasearch_blocked", "metasearch_challenge"]
 
 
 class Error(TypedDict):
@@ -39,18 +38,6 @@ class UnknownAirport(FlightsError, ValueError):
 class CityCode(FlightsError, ValueError):
     """An IATA city code (BUE, LON): it names several airports, and Google wants one of them."""
     kind = "city_code"
-
-
-class BlogError(FlightsError):
-    kind = "blog_unavailable"
-
-
-class BlogForbidden(BlogError):
-    kind = "blog_forbidden"
-
-
-class BlogUnreadable(BlogError):
-    kind = "blog_unreadable"
 
 
 class UnknownTool(FlightsError):

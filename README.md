@@ -1,6 +1,6 @@
 # Lets fly
 
-Very fast flight search for your terminal, and an MCP server for your agent: real Google Flights fares and the cheapest dates in a range, every seller's fares from a flight metasearch that compares agencies and airlines, with short links to the booking pages. Over MCP, Claude Code, Claude Desktop, Codex and ChatGPT Desktop also get the deals published on promociones-aereas.com.ar. On Linux and macOS. Secure by default: it runs sandboxed in Docker and reaches only the sites it reads, with no API keys and no accounts.
+Very fast flight search for your terminal, and an MCP server for your agent: real Google Flights fares and the cheapest dates in a range, every seller's fares from a flight metasearch that compares agencies and airlines, with short links to the booking pages. On Linux and macOS. Secure by default: it runs sandboxed in Docker and reaches only the sites it reads, with no API keys and no accounts.
 
 ![An MCP server for your agent in Claude Desktop, then flight search in the terminal](https://github.com/user-attachments/assets/19d72cf7-3349-45ba-b9f8-ff53cff19ce3)
 
@@ -12,7 +12,7 @@ Very fast flight search for your terminal, and an MCP server for your agent: rea
 - **One way to do it**: no abstractions just in case.
 - **Least surprise**: the price is what you pay, empty is not failed, unknown is `null`.
 - **Small, readable code**: plain functions and dataclasses, comments only for a non-obvious why.
-- **Sharp inside, strict at the edge**: inputs checked where they enter, outputs kept inside their schemas, polite to the sources (10 req/s to Google, 5 s between blog requests, one metasearch search at a time).
+- **Sharp inside, strict at the edge**: inputs checked where they enter, outputs kept inside their schemas, polite to the sources (10 req/s to Google, one metasearch search at a time).
 - **Dependencies earn their place**: curl_cffi and what it needs, nothing else.
 
 ## Use
@@ -47,7 +47,6 @@ The proxy exits once the core is gone, so a client that kills `flights mcp` (Cla
 - `find_airports`: airports by code, city (Spanish names too) or name; a city code lists all its airports.
 - `metasearch_flights`: every seller's live fares for one trip (one way, round trip or multi-city), with one price per itinerary from its cheapest seller, bag, change and refund fees, and a summary per airline and stops. Each call spends 1 search, counted across every session on this machine's IP, and the reply warns to ask first when another one could get the IP blocked.
 - `metasearch_dates`: the lowest fares the metasearch saw, per month or per day, for free.
-- `promociones-aereas`: the deals on promociones-aereas.com.ar (flights, packages, hotels), with their dates and links.
 
 ## Links
 
@@ -82,7 +81,7 @@ Or ask a new agent session for flights in plain words: the `flights` mcp searche
 
 ## Tests
 
-`flights test` runs offline. A few `ds:1` rows written by hand pin the decode: the pair price, the operator, the bags, the airport change, `overnight`, `self_transfer` and `price_reference`; metasearch answers written by hand pin its flow, its decoder, blocks, the cache and the budget. The output of the 6 tools and every error kind are checked against the published schemas, which `flights selftest` also does with live replies.
+`flights test` runs offline. A few `ds:1` rows written by hand pin the decode: the pair price, the operator, the bags, the airport change, `overnight`, `self_transfer` and `price_reference`; metasearch answers written by hand pin its flow, its decoder, blocks, the cache and the budget. The output of the 5 tools and every error kind are checked against the published schemas, which `flights selftest` also does with live replies.
 
 Every PR runs `flights test` on GitHub Actions. `gh workflow run release.yml -f version=vX.Y.Z` tags main and publishes a release only if `flights test` and `flights selftest` pass. A release is only a label: `flights update` installs the latest commit on main.
 
