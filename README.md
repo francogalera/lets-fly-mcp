@@ -25,7 +25,7 @@ Very fast flight search for your terminal, and an MCP server for your agent: rea
     flights test                         offline tests inside the image, the launcher on bash 3.2, --from with git
     flights selftest                     live check: searches, filters, MCP and its schemas, network blocking, cleanup
     flights audit [filters]              live data checks against Google: pair prices, dates, a burst, the filters
-    flights update [--from PATH]         install the latest version, or a checkout to try it (see Update)
+    flights update [--from PATH]         install the latest release, or a checkout to try it (see Update)
     flights rollback                     back to the previous version, without building
     flights build                        rebuild both images after changing the code
     flights image                        tag of the core image, which follows its code
@@ -75,15 +75,15 @@ Or ask a new agent session for flights in plain words: the `flights` mcp searche
 
 ## Update
 
-`flights update` installs the latest version in its own folder, apart from your clone, which you can delete if no client failed. If the build fails, nothing changes. Only the current and the previous version stay.
+`flights update` installs the latest release in its own folder, apart from your clone, which you can delete if no client failed. It downloads the release's commit and pulls its two images from GitHub's container registry by the digests the release declares in `images.json`, so it runs the images that passed the release's checks and builds nothing. If anything does not match, nothing changes. Only the current and the previous version stay.
 
-`flights rollback` goes back to the previous version without building. `flights update --from .` installs a checkout to try a branch: each try replaces the last one, and rollback returns to the version you were on before trying.
+`flights rollback` goes back to the previous version without building. `flights update --from .` builds and installs a checkout to try a branch: each try replaces the last one, and rollback returns to the version you were on before trying.
 
 ## Tests
 
 `flights test` runs offline. A few `ds:1` rows written by hand pin the decode: the pair price, the operator, the bags, the airport change, `overnight`, `self_transfer` and `price_reference`; metasearch answers written by hand pin its flow, its decoder, blocks, the cache and the budget. The output of the 5 tools and every error kind are checked against the published schemas, which `flights selftest` also does with live replies.
 
-Every PR runs `flights test` on GitHub Actions. `gh workflow run release.yml -f version=vX.Y.Z` tags main and publishes a release only if `flights test` and `flights selftest` pass. A release is only a label: `flights update` installs the latest commit on main.
+Every PR runs `flights test` on GitHub Actions. `gh workflow run release.yml -f version=vX.Y.Z` builds both images on amd64 and arm64, runs `flights test` and `flights selftest` on each, and only then pushes those same images and publishes the release with their digests. A ruleset on main asks every change for a PR whose `flights test` passed; only the repository admin can bypass it.
 
 ## Credits
 

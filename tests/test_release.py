@@ -1,8 +1,10 @@
-"""flights update and rollback with every command faked and the files real: the order, a failed build, the cleanup."""
+"""flights update and rollback with every command faked and the files real: the order, the release checks, a failed
+build or pull, the cleanup."""
 import contextlib
 import gzip
 import importlib.util
 import io
+import json
 import os
 import shlex
 import subprocess
@@ -37,15 +39,22 @@ def tar_of(path, tags, mode, prefix="", commit=None, updater=True):
             tar.addfile(info, io.BytesIO(data))
 
 
+def ref(tag):
+    """The digest reference a release declares for a local tag."""
+    name, version = tag.split(":")
+    return f"ghcr.io/francogalera/{name}@sha256:{version.encode().hex()[:64].ljust(64, '0')}"
+
+
 class Machine:
-    """Answers every command release.py runs. A version's tar holds the tags of its images."""
+    """Answers every command release.py runs. A version's tar holds the tags of its images; the release declares its
+    commit and an image by digest per tag."""
 
     def __init__(self, root):
         self.root, self.log, self.images, self.in_use = root, [], set(), set()
         self.commit, self.tags, self.tree, self.head_tree = None, (), "t" * 40, "t" * 40
         self.build_fails = self.setup_fails = self.no_launcher = False
         self.updater = self.update_runs = True
-        self.download = None
+        self.download, self.release, self.pull_fails, self.pulled = None, None, set(), set()
 
     def current(self):
         path = os.path.join(self.root, "current")
@@ -55,14 +64,32 @@ class Machine:
         args = list(args)
         name = os.path.basename(args[0])
         out, code, err = "", 0, ""
-        if name == "curl":
+        if name == "curl" and args[-1].endswith("/images.json"):
+            if self.release is None:
+                return subprocess.CompletedProcess(args, 22, "404", "curl: (22) The requested URL returned error: 404")
+            with open(args[args.index("-o") + 1], "w", encoding="utf-8") as f:
+                f.write(self.release if isinstance(self.release, str) else json.dumps(self.release))
+            out = "200"
+        elif name == "curl":
             path = args[args.index("-o") + 1]
             if self.download is not None:
                 with open(path, "wb") as f:
                     f.write(self.download)
             else:
-                tar_of(path, self.tags, "w:gz", "lets-fly-mcp-main/", self.commit, self.updater)
-            self.log.append("download")
+                tar_of(path, self.tags, "w:gz", "lets-fly-mcp-x/", self.commit, self.updater)
+            self.log.append(("download", args[-1].rsplit("/", 1)[1]))
+        elif name == "docker" and args[1] == "pull":
+            self.log.append(("pull", self.current()))
+            if args[3] in self.pull_fails:
+                code, err = 1, "manifest unknown"
+            else:
+                self.pulled.add(args[3])
+        elif name == "docker" and args[1] == "tag":
+            code = int(args[2] not in self.pulled)
+            if not code:
+                self.images.add(args[3])
+        elif name == "docker" and args[1:3] == ["image", "rm"] and args[3].startswith("ghcr.io/"):
+            self.pulled.discard(args[3])
         elif name == "tar":
             return REAL_RUN(args, **kwargs)
         elif name == "git":
@@ -124,10 +151,20 @@ class ReleaseTest(unittest.TestCase):
     def version(self, commit, core=None, proxy="lets-fly-proxy:1"):
         self.machine.commit = commit
         self.machine.tags = (core or f"lets-fly-core:{commit[0]}", proxy)
+        self.machine.release = {"commit": commit, "images": {tag: ref(tag) for tag in self.machine.tags}}
 
     def update(self, commit, **tags):
         self.version(commit, **tags)
         self.release.update()
+
+    def refused(self, says):
+        """update stops, says why, and leaves the installed version as it was."""
+        before = self.links(), self.folders()
+        with self.assertRaises(SystemExit) as stop:
+            self.release.update()
+        self.assertIn(says, str(stop.exception))
+        self.assertIn("nothing changed", str(stop.exception))
+        self.assertEqual((self.links(), self.folders()), before)
 
     def try_out(self, commit, tree, **tags):
         self.version(commit, **tags)
@@ -144,38 +181,82 @@ class ReleaseTest(unittest.TestCase):
     def steps(self, kind):
         return [step for step in self.machine.log if step[0] == kind]
 
-    def test_it_builds_before_switching_and_sets_up_after(self):
+    def test_it_pulls_the_release_before_switching_and_sets_up_after(self):
         self.update(A)
         self.update(B)
-        log = [step for step in self.machine.log if step[0] in ("build", "setup")]
-        self.assertEqual(log, [("build", None), ("setup", "releases/aaaaaaaaaaaa"),
-                               ("build", "releases/aaaaaaaaaaaa"), ("setup", "releases/bbbbbbbbbbbb")])
+        log = [step for step in self.machine.log if step[0] in ("build", "pull", "setup")]
+        self.assertEqual(log, [("pull", None), ("pull", None), ("setup", "releases/aaaaaaaaaaaa"),
+                               ("pull", "releases/aaaaaaaaaaaa"), ("pull", "releases/aaaaaaaaaaaa"),
+                               ("setup", "releases/bbbbbbbbbbbb")])
+        self.assertEqual(self.machine.images, {"lets-fly-core:a", "lets-fly-core:b", "lets-fly-proxy:1"})
+        self.assertEqual(self.machine.pulled, set())
         self.assertEqual(os.readlink(os.path.join(self.home, ".local", "bin", "flights")),
                          os.path.join(self.root, "current", "bin", "flights"))
         self.assertTrue(os.path.exists(os.path.join(self.root, "releases", "bbbbbbbbbbbb", "tags")))
 
-    def test_a_failed_build_changes_nothing(self):
+    def test_it_installs_the_release_commit_and_not_main(self):
+        self.update(B)
+        self.assertEqual(self.steps("download"), [("download", f"{B}.tar.gz")])
+        self.assertNotIn("main", self.release.RELEASE)
+        self.assertEqual(self.links(), ("releases/bbbbbbbbbbbb", None))
+
+    def test_with_no_release_it_installs_nothing_and_says_so(self):
+        self.update(A)
+        self.machine.log.clear()
+        self.machine.release = None
+        self.refused("there is no release yet, or the latest one has no images.json")
+        self.assertEqual(self.machine.log, [])
+
+    def test_a_release_it_cannot_read_changes_nothing(self):
+        self.update(A)
+        good = {"commit": B, "images": {"lets-fly-core:b": ref("lets-fly-core:b")}}
+        broken = ["not json", [], {"commit": B}, {**good, "commit": "main"}, {**good, "images": {}},
+                  {**good, "images": {"lets-fly-core:b": "docker.io/evil/lets-fly-core:latest"}},
+                  {**good, "images": {"lets-fly-proxy:b": ref("lets-fly-core:b")}}]
+        for release in broken:
+            with self.subTest(release=release):
+                self.machine.release = release
+                self.refused("is not a release this version can read")
+
+    def test_a_tar_of_another_commit_changes_nothing(self):
+        self.update(A)
+        for tar_commit in (None, C):
+            with self.subTest(tar_commit=tar_commit):
+                self.version(B)
+                self.machine.commit = tar_commit
+                self.refused("is not a tar of the release's commit")
+        self.assertEqual(self.steps("pull"), [("pull", None), ("pull", None)])
+
+    def test_images_that_its_code_does_not_run_change_nothing(self):
+        self.update(A)
+        self.version(B)
+        self.machine.release["images"] = {"lets-fly-core:x": ref("lets-fly-core:x"),
+                                          "lets-fly-proxy:1": ref("lets-fly-proxy:1")}
+        self.refused("but its code runs lets-fly-core:b, lets-fly-proxy:1")
+
+    def test_a_failed_pull_changes_nothing(self):
+        self.update(A)
+        self.version(B)
+        self.machine.pull_fails = {ref("lets-fly-proxy:1")}
+        self.refused("manifest unknown")
+        self.assertEqual(self.steps("setup"), [("setup", "releases/aaaaaaaaaaaa")])
+        self.assertEqual(self.machine.pulled, set())
+
+    def test_update_never_builds_and_from_a_checkout_always_does(self):
+        self.update(A)
+        self.try_out(B, "1" * 40)
+        self.assertEqual(self.steps("build"), [("build", "releases/aaaaaaaaaaaa")])
+
+    def test_a_failed_build_of_a_checkout_changes_nothing(self):
         self.update(A)
         self.machine.log.clear()
         self.machine.build_fails = True
         with self.assertRaises(SystemExit) as stop:
-            self.update(B)
+            self.try_out(B, "1" * 40)
         self.assertIn("nothing changed", str(stop.exception))
         self.assertEqual(self.links(), ("releases/aaaaaaaaaaaa", None))
         self.assertEqual(self.folders(), ["aaaaaaaaaaaa"])
-        self.assertEqual(self.machine.log, ["download", ("build", "releases/aaaaaaaaaaaa")])
-
-    def test_a_tar_that_names_no_commit_changes_nothing(self):
-        self.update(A)
-        self.machine.log.clear()
-        self.version(B)
-        self.machine.commit = None
-        with self.assertRaises(SystemExit) as stop:
-            self.release.update()
-        self.assertIn("is not a tar that names its commit", str(stop.exception))
-        self.assertEqual(self.links(), ("releases/aaaaaaaaaaaa", None))
-        self.assertEqual(self.folders(), ["aaaaaaaaaaaa"])
-        self.assertEqual(self.steps("build"), [])
+        self.assertEqual(self.steps("build"), [("build", "releases/aaaaaaaaaaaa")])
 
     def test_a_download_that_is_not_a_tar_changes_nothing(self):
         self.update(A)

@@ -18,7 +18,7 @@ if command -v sha256sum >/dev/null; then SHA=(sha256sum); else SHA=(shasum -a 25
 # Tags follow the content: if something changed and was not rebuilt, startup says so
 IMAGE="lets-fly-core:$(cd "$HERE" && find src/letsfly docker -type f ! -path '*/__pycache__/*' -print0 | LC_ALL=C sort -z |
   xargs -0 "${SHA[@]}" | "${SHA[@]}" | cut -c1-12)"
-PROXY_IMAGE="lets-fly-proxy:$("${SHA[@]}" "$HERE/docker/proxy.py" | cut -c1-12)"
+PROXY_IMAGE="lets-fly-proxy:$(cat "$HERE/docker/proxy.py" "$HERE/docker/Dockerfile" | "${SHA[@]}" | cut -c1-12)"
 ALLOW=www.google.com,api.turismocity.com
 METASEARCH=api.turismocity.com
 LOG="${XDG_STATE_HOME:-$HOME/.local/state}/flights/egress.log"
@@ -42,7 +42,7 @@ usage: flights COMMAND [ARGS]
   audit [filters]                              live data checks: pair prices, dates, a burst, the filters
   mcp                                          the MCP server over stdio, for the flights agent
   links                                        the link server, which runs as a service of the user
-  update [--from PATH]                         install the latest version, or a checkout to try it
+  update [--from PATH]                         install the latest release, or a checkout to try it
   rollback                                     back to the previous version, without building
   build                                        rebuild both images after changing src/ or docker/
   image                                        tag of the core image
