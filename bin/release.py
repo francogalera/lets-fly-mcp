@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """flights update and rollback. Each version lives apart from any checkout, in ~/.local/share/flights/releases/<id>,
-with the symlinks current and previous. Python 3.9, as macOS ships it, and the standard library only.
+with the symlinks current and previous. update installs the latest release with the images it published; --from and
+install build a checkout. Python 3.9, as macOS ships it, and the standard library only.
 Usage: release.py update [--from PATH] | rollback | install PATH"""
 import argparse
+import json
 import os
 import re
 import shlex
@@ -13,7 +15,10 @@ import tarfile
 import tempfile
 import zlib
 
-TARBALL = "https://github.com/francogalera/lets-fly-mcp/archive/refs/heads/main.tar.gz"
+REPO = "https://github.com/francogalera/lets-fly-mcp"
+# What the release workflow published after its checks: the commit and each image by digest
+RELEASE = f"{REPO}/releases/latest/download/images.json"
+IMAGE_REF = re.compile(r"ghcr\.io/francogalera/(lets-fly-(?:core|proxy))@sha256:[0-9a-f]{64}")
 HOME = os.path.expanduser("~")
 # Not XDG_DATA_HOME: the service and some clients start without it, and every caller must find the same folder
 ROOT = os.path.join(HOME, ".local", "share", "flights")
@@ -58,17 +63,62 @@ def commit_of(path):
         return ""
 
 
-def download(folder):
-    """Main from GitHub, so no copy of the repo stays here. The tar names its commit, so the two cannot disagree."""
+def latest():
+    """The latest release's commit and its images, local tag to reference by digest."""
     with tempfile.TemporaryDirectory() as tmp:
-        path = os.path.join(tmp, "main.tar.gz")
-        run("curl", "-fsSL", "-o", path, "--connect-timeout", "20", "--max-time", "120", TARBALL)
-        sha = commit_of(path)
-        if not re.fullmatch("[0-9a-f]{40}", sha):
-            sys.exit(f"flights: {TARBALL} is not a tar that names its commit; nothing changed")
+        path = os.path.join(tmp, "images.json")
+        r = subprocess.run(["curl", "-fsSL", "-o", path, "-w", "%{http_code}", "--connect-timeout", "20",
+                            "--max-time", "60", RELEASE], capture_output=True, text=True)
+        if r.stdout.strip() == "404":
+            sys.exit("flights: there is no release yet, or the latest one has no images.json; nothing changed")
+        if r.returncode:
+            sys.exit(f"flights: reading the latest release failed: {r.stderr.strip()}; nothing changed")
+        try:
+            with open(path, encoding="utf-8") as f:
+                release = json.load(f)
+            commit, images = release["commit"], release["images"]
+            valid = re.fullmatch("[0-9a-f]{40}", commit) and images and all(
+                IMAGE_REF.fullmatch(ref) and IMAGE_REF.fullmatch(ref).group(1) == tag.split(":")[0]
+                for tag, ref in images.items())
+        except (ValueError, KeyError, TypeError, AttributeError):
+            valid = False
+    if not valid:
+        sys.exit(f"flights: {RELEASE} is not a release this version can read; nothing changed")
+    return commit, images
+
+
+def download(folder, commit):
+    """The release's commit from GitHub, so no copy of the repo stays here. The tar names its commit."""
+    url = f"{REPO}/archive/{commit}.tar.gz"
+    with tempfile.TemporaryDirectory() as tmp:
+        path = os.path.join(tmp, "release.tar.gz")
+        run("curl", "-fsSL", "-o", path, "--connect-timeout", "20", "--max-time", "120", url)
+        if commit_of(path) != commit:
+            sys.exit(f"flights: {url} is not a tar of the release's commit; nothing changed")
         # tar, not tarfile: the safe extraction filter is missing from the Python macOS ships
         run("tar", "-xzf", path, "--strip-components=1", "-C", folder)
-    return sha[:12]
+    return commit[:12]
+
+
+def pull(folder, images):
+    """The release's images by digest, which docker checks, tagged as the version's launcher names them."""
+    tags = run(os.path.join(folder, "bin", "flights"), "images").split()
+    if sorted(tags) != sorted(images):
+        sys.exit(f"flights: the release declares {', '.join(sorted(images))}, but its code runs {', '.join(tags)}; "
+                 "nothing changed")
+    pulled = []
+    for ref in images.values():
+        r = subprocess.run(["docker", "pull", "-q", ref], capture_output=True, text=True)
+        if r.returncode:
+            # prune only sees the local tags, so an image left under its digest reference would stay for good
+            for done in pulled:
+                subprocess.run(["docker", "image", "rm", done], capture_output=True, text=True)
+            sys.exit(f"flights: pulling {ref} failed: {r.stderr.strip()}; nothing changed")
+        pulled.append(ref)
+    for tag, ref in images.items():
+        run("docker", "tag", ref, tag)
+        # The digest reference goes, so prune finds every image of a version by its tag
+        subprocess.run(["docker", "image", "rm", ref], capture_output=True, text=True)
 
 
 def export(source, folder):
@@ -153,13 +203,22 @@ def update(source=None, trial=False):
     os.makedirs(RELEASES, exist_ok=True)
     folder = tempfile.mkdtemp(prefix=".new-", dir=RELEASES)
     try:
-        version = download(folder) if source is None else export(source, folder)
+        if source is None:
+            commit, images = latest()
+            version = download(folder, commit)
+        else:
+            version = export(source, folder)
         problem = why_it_cannot_update(folder)
         if problem:
-            sys.exit(f"flights: {source or TARBALL} cannot run its own update: {problem}; nothing changed")
-        print(f"flights: building {version}", flush=True)
-        if subprocess.run([os.path.join(folder, "bin", "flights"), "build"]).returncode:
-            sys.exit("flights: the build failed; nothing changed")
+            sys.exit(f"flights: {source or 'the latest release'} cannot run its own update: {problem}; "
+                     "nothing changed")
+        if source is None:
+            print(f"flights: pulling the images of {version}", flush=True)
+            pull(folder, images)
+        else:
+            print(f"flights: building {version}", flush=True)
+            if subprocess.run([os.path.join(folder, "bin", "flights"), "build"]).returncode:
+                sys.exit("flights: the build failed; nothing changed")
         place(folder, version, trial)
         switch(version)
         activate()
@@ -188,7 +247,7 @@ def rollback():
 def main():
     cli = argparse.ArgumentParser(prog="flights", description="Installs versions of flights apart from any checkout.")
     sub = cli.add_subparsers(dest="command", required=True)
-    up = sub.add_parser("update", help="install the latest version, or with --from a checkout to try it")
+    up = sub.add_parser("update", help="install the latest release, or with --from a checkout to try it")
     up.add_argument("--from", dest="source", metavar="PATH", help="the checkout, new files and changes included")
     sub.add_parser("rollback", help="back to the previous version, without building")
     sub.add_parser("install", help="install a checkout as a stable version, as install.sh does").add_argument("source")

@@ -3,6 +3,8 @@
 # dependencies by the hash of every file, wheels only.
 
 FROM python:3.12-slim@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b AS proxy
+# Links the published image to the repo, whose visibility it takes
+LABEL org.opencontainers.image.source=https://github.com/francogalera/lets-fly-mcp
 COPY docker/proxy.py /proxy.py
 USER 65534:65534
 ENTRYPOINT ["python3", "-I", "-u", "/proxy.py"]
@@ -19,6 +21,7 @@ COPY src/letsfly /app/.venv/lib/python3.12/site-packages/letsfly
 RUN /app/.venv/bin/python -m compileall -q /app/.venv
 
 FROM python:3.12-slim@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b AS core
+LABEL org.opencontainers.image.source=https://github.com/francogalera/lets-fly-mcp
 COPY --from=build /app/.venv /app/.venv
 ENV PATH=/app/.venv/bin:$PATH PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 HOME=/tmp
 USER 65534:65534
