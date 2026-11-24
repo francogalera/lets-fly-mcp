@@ -4,41 +4,28 @@ Very fast flight search for your terminal, and an MCP server for your agent: rea
 
 ![An MCP server for your agent in Claude Desktop, then flight search in the terminal](https://github.com/user-attachments/assets/19d72cf7-3349-45ba-b9f8-ff53cff19ce3)
 
-## Conventions
+## Install
 
-- **Secure by default**: each run is a read-only, unprivileged container with nothing mounted that reaches only the sites it reads; every other attempt is blocked and logged. No API keys, no accounts.
-- **Developer happiness**: tools read like the question, answers need no docs.
-- **Convention over configuration**: no config files or env vars; defaults decide.
-- **One way to do it**: no abstractions just in case.
-- **Least surprise**: the price is what you pay, empty is not failed, unknown is `null`.
-- **Small, readable code**: plain functions and dataclasses, comments only for a non-obvious why.
-- **Sharp inside, strict at the edge**: inputs checked where they enter, outputs kept inside their schemas, polite to the sources (10 req/s to Google, one metasearch search at a time).
-- **Dependencies earn their place**: curl_cffi and what it needs, nothing else.
+    curl -fsSL https://github.com/francogalera/lets-fly-mcp/releases/latest/download/release.py | python3 -I - update
+
+It needs Docker, curl and python3. It installs the latest release with its ready-made images, the `flights` command in `~/.local/bin`, the link server, Claude Code (the subagent and the `broad-search` skill), Claude Desktop and Codex when they are installed, and a plugin in the personal marketplace, from which ChatGPT Desktop installs it. A client that fails is skipped with a warning, and the next update tries again.
 
 ## Use
 
-    ./install.sh                         install this folder: images, command, clients and link server
+Ask a new agent session for flights in plain words: the `flights` MCP searches the dates and airports you allow and answers with the best options, their bags, layovers and links.
+
+Or search from any terminal:
+
+    flights search EZE JFK 2026-12-10    flights on a date, with an optional return date
+    flights dates EZE JFK START END      lowest price per departure date, with an optional trip length
+    flights airports QUERY               airports by code, city or name
+    flights meta EZE JFK 2026-12-10      every seller's fares on the metasearch (spends 1 search)
+    flights meta-dates EZE JFK           lowest fares the metasearch saw, per month or per day (free)
+    flights update                       install the latest release (see Update)
+    flights rollback                     back to the previous version
     flights --help                       every command
-    flights search EZE JFK 2026-12-10    also: dates, airports, meta, meta-dates; --json prints what the agent gets
-    flights mcp                          the MCP server over stdio
-    flights links                        the link server, which runs as a service of the user (see Links)
-    flights test                         offline tests inside the image, the launcher on bash 3.2, --from with git
-    flights selftest                     live check: searches, filters, MCP and its schemas, network blocking, cleanup
-    flights audit [filters]              live data checks against Google: pair prices, dates, a burst, the filters
-    flights update [--from PATH]         install the latest release, or a checkout to try it (see Update)
-    flights rollback                     back to the previous version, without building
-    flights build                        rebuild both images after changing the code
-    flights image                        tag of the core image, which follows its code
-    flights images                       tags of both images
 
-## Isolation
-
-Each session gets its own internal network and two read-only, unprivileged containers:
-
-- **Core**: letsfly, the MCP server and the terminal commands, with no network of its own and nothing mounted.
-- **Proxy**: the only way out. It lets HTTPS through only to the allowed hosts and logs every attempt. Its one mount is a read-only file where the host logs each metasearch search, block and query (time, egress IP, session), so every session on this machine shares one budget per IP. It learns that IP from the metasearch's edge, with a request that spends no search and is logged like the rest.
-
-The proxy exits once the core is gone, so a client that kills `flights mcp` (Claude Code allows half a second) leaves no containers or networks behind.
+Each search command takes `--json`, which prints what the agent gets.
 
 ## Tools
 
@@ -54,36 +41,57 @@ The tools hand out short links, `http://127.0.0.1:18375/<id>`, because the agent
 
 The core still mounts nothing: it prints each link on stderr, and the launcher keeps it on the host when the id matches. `flights links` redirects each id, only on 127.0.0.1, as a user service that every install sets up and restarts (systemd on Linux, launchd on macOS). The port never changes and the files last, so links in old answers keep working.
 
-## Clients
+## Security
 
-Every install sets up Claude Code (the subagent and the `broad-search` skill), Claude Desktop and Codex when they are installed, and a plugin in the personal marketplace, from which ChatGPT Desktop installs it. A client that fails is skipped with a warning, and the next update tries again.
+Each session gets its own internal network and two read-only, unprivileged containers:
 
-## Install
+- **Core**: letsfly, the MCP server and the terminal commands, with no network of its own and nothing mounted.
+- **Proxy**: the only way out. It lets HTTPS through only to the allowed hosts and logs every attempt. Its one mount is a read-only file where the host logs each metasearch search, block and query (time, egress IP, session), so every session on this machine shares one budget per IP. It learns that IP from the metasearch's edge, with a request that spends no search and is logged like the rest.
 
-    git clone https://github.com/francogalera/lets-fly-mcp.git ~/lets-fly && ~/lets-fly/install.sh
-
-It needs Docker, git, curl and python3. Then search from any terminal:
-
-    $ flights search EZE JFK 2026-12-10
-    USD 831  American
-      EZE-JFK  2026-12-10 20:40 > 2026-12-11 05:30  10.8 h  AA954
-      http://127.0.0.1:18375/lmzcjcev
-
-`flights dates`, `flights airports`, `flights meta` and `flights meta-dates` work the same way, and `--json` prints what the agent gets.
-
-Or ask a new agent session for flights in plain words: the `flights` mcp searches the dates and airports you allow and answers with the best options, their bags, layovers and links.
+The proxy exits once the core is gone, so a client that kills `flights mcp` (Claude Code allows half a second) leaves no containers or networks behind.
 
 ## Update
 
-`flights update` installs the latest release in its own folder, apart from your clone, which you can delete if no client failed. It downloads the release's commit and pulls its two images from GitHub's container registry by the digests the release declares in `images.json`, so it runs the images that passed the release's checks and builds nothing. If anything does not match, nothing changes. Only the current and the previous version stay.
+`flights update` installs the latest release in its own folder. It downloads the release's commit and pulls its two images from GitHub's container registry by the digests the release declares in `images.json`, so it runs the images that passed the release's checks and builds nothing. If anything does not match, nothing changes. Only the current and the previous version stay.
 
-`flights rollback` goes back to the previous version without building. `flights update --from .` builds and installs a checkout to try a branch: each try replaces the last one, and rollback returns to the version you were on before trying.
+`flights rollback` goes back to the previous version without building.
 
-## Tests
+## Development
+
+Conventions:
+
+- **Secure by default**: each run is a read-only, unprivileged container with nothing mounted that reaches only the sites it reads; every other attempt is blocked and logged. No API keys, no accounts.
+- **Developer happiness**: tools read like the question, answers need no docs.
+- **Convention over configuration**: no config files or env vars; defaults decide.
+- **One way to do it**: no abstractions just in case.
+- **Least surprise**: the price is what you pay, empty is not failed, unknown is `null`.
+- **Small, readable code**: plain functions and dataclasses, comments only for a non-obvious why.
+- **Sharp inside, strict at the edge**: inputs checked where they enter, outputs kept inside their schemas, polite to the sources (10 req/s to Google, one metasearch search at a time).
+- **Dependencies earn their place**: curl_cffi and what it needs, nothing else.
+
+Commands:
+
+    flights mcp                          the MCP server over stdio
+    flights links                        the link server, which runs as a service of the user (see Links)
+    flights update --from PATH           build and install a checkout to try it
+    flights build                        rebuild both images after changing the code
+    flights test                         offline tests inside the image, the launcher on bash 3.2, --from with git
+    flights selftest [--no-filters]      live check: searches, filters, MCP and its schemas, network blocking, cleanup
+    flights audit [filters]              live data checks against Google: pair prices, dates, a burst, the filters
+    flights image                        tag of the core image, which follows its code
+    flights images                       tags of both images
+
+To work on a clone, which needs git too, run its `./install.sh`: it builds both images and installs the checkout as a stable version. `flights update --from .` installs a checkout to try a branch: each try replaces the last one, and rollback returns to the version you were on before trying.
+
+### Tests
 
 `flights test` runs offline. A few `ds:1` rows written by hand pin the decode: the pair price, the operator, the bags, the airport change, `overnight`, `self_transfer` and `price_reference`; metasearch answers written by hand pin its flow, its decoder, blocks, the cache and the budget. The output of the 5 tools and every error kind are checked against the published schemas, which `flights selftest` also does with live replies.
 
-Every PR runs `flights test` on GitHub Actions. `gh workflow run release.yml -f version=vX.Y.Z` builds both images on amd64 and arm64, runs `flights test` and `flights selftest` on each, and only then pushes those same images and publishes the release with their digests. A ruleset on main asks every change for a PR whose `flights test` passed; only the repository admin can bypass it.
+Every PR runs `flights test` on GitHub Actions, and main only takes changes through a PR that passed it. The repository admin can bypass this.
+
+### Releases
+
+`gh workflow run release.yml -f version=vX.Y.Z` builds both images on amd64 and arm64 and runs `flights test` and `flights selftest --no-filters` on each. Only then does it push those same images and publish the release with their digests. The release skips the filter checks, which test Google rather than the image, and retries the selftest once after two minutes, since Google throttles shared runner IPs. For the filter checks, run `flights selftest` or `flights audit filters` locally.
 
 ## Credits
 

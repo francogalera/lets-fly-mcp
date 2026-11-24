@@ -7,9 +7,4 @@ cd "$(dirname "$0")"
 
 python3 -I bin/release.py install "$PWD"
 
-# The subagent starts the MCP with the `flights` command, so it must be on Claude Code's PATH
-case ":$PATH:" in
-  *":$HOME/.local/bin:"*) ;;
-  *) echo "Warning: ~/.local/bin is not on PATH; add it or the subagent will not find 'flights'" >&2 ;;
-esac
 echo "Done: 'flights --help' in the terminal, the flights subagent in new Claude Code sessions, the clients and links above."
