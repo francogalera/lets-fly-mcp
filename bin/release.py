@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """flights update and rollback. Each version lives apart from any checkout, in ~/.local/share/flights/releases/<id>,
-with the symlinks current and previous. update installs the latest release with the images it published; --from and
+with the symlinks current and previous. update installs the latest release with the images it published, also where
+nothing is installed yet: the release carries this file, and the README's install pipes it to python3. --from and
 install build a checkout. Python 3.9, as macOS ships it, and the standard library only.
 Usage: release.py update [--from PATH] | rollback | install PATH"""
 import argparse
@@ -244,6 +245,12 @@ def rollback():
     activate()
 
 
+def warn_path():
+    folder = os.path.dirname(COMMAND)
+    if folder not in os.environ.get("PATH", "").split(os.pathsep):
+        print(f"Warning: {folder} is not on PATH; add it or the subagent will not find 'flights'", file=sys.stderr)
+
+
 def main():
     cli = argparse.ArgumentParser(prog="flights", description="Installs versions of flights apart from any checkout.")
     sub = cli.add_subparsers(dest="command", required=True)
@@ -256,6 +263,7 @@ def main():
         rollback()
     else:
         update(args.source, trial=args.command == "update" and args.source is not None)
+        warn_path()
     previous = target(PREVIOUS)
     print(f"flights: on {os.path.basename(target(CURRENT))}, "
           f"{'previous ' + os.path.basename(previous) if previous else 'no previous version'}")

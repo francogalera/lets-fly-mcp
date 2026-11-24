@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # flights: letsfly's terminal commands and MCP server, each run in its own sandbox in Docker.
-# Commands, isolation and links: README.md.
+# Commands, security and links: README.md.
 set -euo pipefail
 
 # Clients on macOS start servers without the shell's PATH, and Docker Desktop and Homebrew live outside the default
@@ -48,7 +48,7 @@ usage: flights COMMAND [ARGS]
   image                                        tag of the core image
   images                                       tags of both images
   test                                         offline tests in the image, this script on bash 3.2, --from with git
-  selftest                                     live check: searches, filters, MCP, network blocking, cleanup
+  selftest [--no-filters]                      live check: searches, filters, MCP, network blocking, cleanup
 
 search, dates, airports, meta and meta-dates take --json (the reply as the agent gets it); COMMAND --help shows the rest.
 USAGE
@@ -158,7 +158,7 @@ case "${1:-}" in
   links) exec python3 -I "$HERE/src/letsfly/links.py" serve "$LINKS" ;;
   image) echo "$IMAGE"; exit ;;
   images) printf '%s\n' "$IMAGE" "$PROXY_IMAGE"; exit ;;
-  selftest) exec python3 -I "$HERE/tests/selftest.py" "$HERE/bin/flights" ;;
+  selftest) shift; exec python3 -I "$HERE/tests/selftest.py" "$HERE/bin/flights" "$@" ;;
   test)
     shift
     "$HERE/tests/bash32.sh" "$IMAGE" "$BASH32"

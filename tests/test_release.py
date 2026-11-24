@@ -400,6 +400,26 @@ class ReleaseTest(unittest.TestCase):
         self.update(C)
         self.assertEqual(self.links(), ("releases/cccccccccccc", "releases/bbbbbbbbbbbb"))
 
+    def test_it_warns_when_the_command_is_not_on_path(self):
+        folder = os.path.dirname(self.release.COMMAND)
+        for path, warns in (("/usr/bin", True), (f"/usr/bin:{folder}", False)):
+            with self.subTest(path=path), mock.patch.dict(os.environ, {"PATH": path}), \
+                    contextlib.redirect_stderr(io.StringIO()) as err:
+                self.release.warn_path()
+            self.assertEqual(f"{folder} is not on PATH" in err.getvalue(), warns)
+
+    def test_update_and_install_warn_about_path_and_rollback_does_not(self):
+        warned = {}
+        for commit, argv in ((A, ["update"]), (B, ["install", "/checkout"]), (None, ["rollback"])):
+            if commit:
+                self.version(commit)
+            with mock.patch.object(sys, "argv", ["release.py", *argv]), \
+                    mock.patch.dict(os.environ, {"PATH": "/usr/bin"}), \
+                    contextlib.redirect_stderr(io.StringIO()) as err:
+                self.release.main()
+            warned[argv[0]] = "is not on PATH" in err.getvalue()
+        self.assertEqual(warned, {"update": True, "install": True, "rollback": False})
+
     def test_an_install_counts_as_stable(self):
         self.version(A)
         self.release.update("/checkout")

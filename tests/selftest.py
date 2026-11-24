@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """flights selftest: the core image end to end with the real isolation. Searches through the
 terminal and the MCP, live replies against their output schema, the proxy, and nothing left behind or let out.
-Usage: selftest.py PATH_TO_bin/flights"""
+--no-filters skips the checks that Google honors each filter, which test Google rather than the image.
+Usage: selftest.py PATH_TO_bin/flights [--no-filters]"""
 import datetime
 import http.client
 import json
@@ -16,6 +17,9 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 from letsfly.mcp import problems  # noqa: E402  stdlib only, so it runs on the host
 
 LAUNCHER = sys.argv[1]
+if sys.argv[2:] not in ([], ["--no-filters"]):
+    sys.exit("usage: flights selftest [--no-filters]")
+FILTERS = not sys.argv[2:]
 IMAGE = subprocess.run([LAUNCHER, "image"], capture_output=True, text=True, check=True).stdout.strip()
 LOG = os.path.join(os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state"), "flights", "egress.log")
 BUDGET = os.path.expanduser("~/.local/state/flights/metasearch-budget.log")
@@ -231,7 +235,7 @@ def probe_mounts(pid):
 
 
 def main():
-    print(f"flights selftest: {IMAGE}, {ROUTE[0]}-{ROUTE[1]} {DATE}")
+    print(f"flights selftest: {IMAGE}, {ROUTE[0]}-{ROUTE[1]} {DATE}{'' if FILTERS else ', without the filter checks'}")
     log_start = os.path.getsize(LOG) if os.path.exists(LOG) else 0
 
     cli = subprocess.Popen([LAUNCHER, "search", *ROUTE, DATE, "--json"],
@@ -245,7 +249,8 @@ def main():
     except ValueError:
         check("terminal search", False, (err or out).strip()[-200:])
     check("the terminal leaves no containers or networks", not leftovers(cli.pid))
-    google_honors_filters()
+    if FILTERS:
+        google_honors_filters()
 
     mcp = Mcp()
     try:
@@ -267,7 +272,8 @@ def main():
               bool(rows) and page_ok(rows[0].get("link")), (rows[0].get("link") or "no link") if rows else "no results")
         check("MCP: short reply (under 4000 characters)", len(text) < 4000, f"{len(text)} characters")
         fits("search_flights", schemas.get("search_flights"), res)
-        live_filters(mcp, schemas.get("search_flights"))
+        if FILTERS:
+            live_filters(mcp, schemas.get("search_flights"))
         res = mcp.call("tools/call", {"name": "cheapest_dates", "arguments": {
             "origin": ROUTE[0], "destination": ROUTE[1], "start_date": DATE, "end_date": RANGE_END, "trip_days": 10}})["result"]
         data = res.get("structuredContent") or json.loads(res["content"][0]["text"])
